@@ -22,9 +22,9 @@ The system follows a structured deep learning development flow:
 6. **Deployment & Monitoring**: Scaling with Docker/K8s and tracking model drift.
 
 ## Documentation Navigation
-- [System Design](System_Design.md): Architecture, software principles, and security.
-- [ML Pipeline](ML_Pipeline.md): Data engineering, training loops, and model evaluation.
-- [Operations](Operations.md): Deployment, monitoring, and MLOps workflows.
+- [System Design](documentation/System_Design.md): Architecture, software principles, and security.
+- [ML Pipeline](documentation/ML_Pipeline.md): Data engineering, training loops, and model evaluation.
+- [Operations](documentation/Operations.md): Deployment, monitoring, and MLOps workflows.
 
 ## Technology Stack
 - **Core**: Python (Pandas, NumPy)
