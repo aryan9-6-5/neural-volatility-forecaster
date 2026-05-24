@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  # FastAPI serving endpoint
+  serving-api:
+    build: .
+    container_name: volatility_serving_api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./configs:/app/configs
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow-server:5000
+    depends_on:
+      - mlflow-server
+
+  # MLflow tracking server and dashboard
+  mlflow-server:
+    image: python:3.10-slim
+    container_name: mlflow_tracking_server
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/app/mlruns
+    working_dir: /app
+    entrypoint: >
+      sh -c "pip install mlflow && mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns"
