@@ -19,13 +19,19 @@ class TestServingAPI(unittest.TestCase):
     def tearDownClass(cls):
         cls.client_ctx.__exit__(None, None, None)
         
+    def test_root_route(self):
+        """Test GET / returns the dashboard HTML."""
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Neural Volatility Surface Forecaster", response.text)
+
     def test_health_endpoint(self):
         """Test GET /health returns standard healthy status."""
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "healthy")
-        self.assertIn(data["model_type"], ["Mock", "PyTorch Production"])
+        self.assertIn(data["model_type"], ["Mock", "HAR-RV + LSTM Hybrid", "StackedLSTM", "ConvLSTM", "TransformerEncoderModel"])
         
     def test_drift_endpoint(self):
         """Test GET /monitor/drift returns drift metrics."""

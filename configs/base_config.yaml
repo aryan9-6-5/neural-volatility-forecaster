@@ -10,7 +10,7 @@ data:
   processed_dir: "data/processed"
   
   # Temporal sequence settings
-  lookback: 20            # L: number of days of history input
+  lookback: 60            # L: number of days of history input
   forecast_horizons: [1, 5, 10]  # h: step ahead prediction targets
 
   # Chronological split ratios (must sum to 1.0)
@@ -26,28 +26,32 @@ data:
 
 # Model parameters (to be expanded by Developer B)
 model:
-  name: "convlstm"
-  convlstm:
-    hidden_dim: [32, 64, 64]
-    kernel_size: [3, 3]
-    num_layers: 3
+  name: "hybrid"           # active production model: lstm | transformer | hybrid
   lstm:
-    hidden_dim: 256
+    hidden_dim: 64
+    num_layers: 3
+  transformer:
+    d_model: 128
+    nhead: 4
+    num_layers: 3
+  hybrid:
+    hidden_dim: 64         # LSTM residual sub-network hidden dim (reuses lstm config)
     num_layers: 3
 
 # Training execution parameters
 training:
   batch_size: 32
-  learning_rate: 0.001
+  learning_rate: 0.0003
   epochs: 100
   early_stopping_patience: 15
   grad_clip: 1.0
   seed: 42
   loss:
-    lambda_strike: 0.01
-    lambda_expiry: 0.01
-    lambda_calendar: 0.0   # optional calendar spread regularization
-    lambda_butterfly: 0.0  # optional butterfly spread regularization
+    lambda_strike: 0.0001
+    lambda_expiry: 0.0001
+    lambda_calendar: 0.01      # calendar spread arbitrage penalty
+    lambda_butterfly: 0.0      # optional butterfly spread regularization
+    lambda_residual_mean: 1.0  # zero-mean residual penalty for hybrid model
 
 # Serving & Monitoring parameters
 serving:

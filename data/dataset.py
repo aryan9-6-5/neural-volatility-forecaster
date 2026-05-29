@@ -223,53 +223,93 @@ def create_sequences(data: np.ndarray, lookback: int, horizon: int) -> tuple:
 
 def generate_synthetic_dataset(num_days: int = 120) -> tuple:
     """
-    Generate a realistic synthetic volatility surface time-series.
-    Simulates temporal changes by evolving level, skew, and term structure parameters
-    using daily auto-regressive (AR(1)) processes.
+    Generate a highly realistic synthetic volatility surface time-series.
+    Incorporates Markov regime shifts (Calm vs. Crisis), Poisson jumps,
+    leverage effects (skew-level coupling), and GARCH-like volatility clustering.
     
     Formula for surface at time t:
-        IV(kappa, tau) = Level_t - Skew_t * kappa + 0.1 * kappa^2 + Term_t * ln(tau / 0.25)
+        IV(kappa, tau) = Level_t - Skew_t * kappa + Curvature_t * kappa^2 + Term_t * ln(tau / 0.25)
     """
-    logger.info(f"Generating synthetic volatility surface dataset for {num_days} days...")
+    logger.info(f"Generating realistic regime-switching synthetic volatility surface dataset for {num_days} days...")
     
-    # Setup AR(1) state variables for level, skew, and term structure
-    level = 0.22      # baseline standard deviation level (22% IV)
-    skew = 0.08       # volatility smile skew (puts higher than calls)
-    term = 0.04       # term structure slope (long expiries higher vol)
+    # Latent state variables
+    level = 0.18
+    skew = 0.05
+    term = 0.03
+    regime = 0  # 0: Calm, 1: Stressed/Crisis
     
-    # AR(1) parameters
-    phi_l, phi_s, phi_t = 0.95, 0.90, 0.93
-    mu_l, mu_s, mu_t = 0.20, 0.06, 0.03
-    sigma_l, sigma_s, sigma_t = 0.015, 0.006, 0.004
+    # Jump decay state
+    jump_effect = 0.0
     
     surfaces = []
     timestamps = []
-    
     base_date = datetime.now() - timedelta(days=num_days)
     
+    # GARCH-like conditional variance
+    cond_vol = 0.015
+    
     for day in range(num_days):
-        # Evolve latent parameters with AR(1) dynamics + noise
-        level = mu_l + phi_l * (level - mu_l) + np.random.normal(0, sigma_l)
-        skew = mu_s + phi_s * (skew - mu_s) + np.random.normal(0, sigma_s)
-        term = mu_t + phi_t * (term - mu_t) + np.random.normal(0, sigma_t)
+        # 1. Markov Regime Transition
+        if regime == 0:
+            if np.random.rand() < 0.04:  # Calm -> Stress transition
+                regime = 1
+        else:
+            if np.random.rand() < 0.12:  # Stress -> Calm transition
+                regime = 0
+                
+        # 2. Setup regime-specific parameters
+        if regime == 0:
+            mu_l, mu_s, mu_t = 0.16, 0.05, 0.03
+            phi_l, phi_s, phi_t = 0.95, 0.90, 0.93
+            sigma_l_base, sigma_s, sigma_t = 0.010, 0.004, 0.003
+        else:
+            mu_l, mu_s, mu_t = 0.35, 0.14, -0.02  # Inverted term structure in crisis
+            phi_l, phi_s, phi_t = 0.97, 0.92, 0.95
+            sigma_l_base, sigma_s, sigma_t = 0.025, 0.009, 0.006
+
+        # 3. GARCH Volatility Clustering for level shocks
+        cond_vol = 0.6 * cond_vol + 0.3 * (level - mu_l)**2 + 0.1 * sigma_l_base**2
+        cond_vol = np.clip(np.sqrt(cond_vol), 0.005, 0.04)
+
+        # 4. Level shock & Skew/Term structure coupling (leverage/spillover effects)
+        shock_l = np.random.normal(0, cond_vol)
+        shock_s = 0.4 * shock_l + np.random.normal(0, sigma_s)
+        shock_t = -0.2 * shock_l + np.random.normal(0, sigma_t)
+        
+        # 5. Poisson Jumps
+        jump = 0.0
+        if np.random.rand() < 0.03:  # 3% chance of macro shock jump
+            jump = np.random.exponential(0.15)
+            skew += 0.08  # Volatility jump steepens skew immediately (puts bid up)
+            
+        # Decay previous jump effects (half-life of ~4 days)
+        jump_effect = 0.8 * jump_effect + jump
+        
+        # 6. Evolve latent parameters
+        level = mu_l + phi_l * (level - mu_l) + shock_l + jump
+        skew = mu_s + phi_s * (skew - mu_s) + shock_s
+        term = mu_t + phi_t * (term - mu_t) + shock_t
+        
+        # Effective level includes persistent jump impact
+        effective_level = level + jump_effect
         
         # Keep physical parameter bounds
-        level = np.clip(level, 0.08, 0.60)
-        skew = np.clip(skew, 0.01, 0.20)
-        term = np.clip(term, -0.05, 0.12)
+        effective_level = np.clip(effective_level, 0.08, 0.70)
+        skew = np.clip(skew, 0.01, 0.25)
+        term = np.clip(term, -0.06, 0.14)
         
-        # Build 7x7 grid surface
+        # 7. Build 7x7 grid surface
         grid_iv = np.zeros((len(GRID_TAUS), len(GRID_KAPPAS)))
         for i, tau in enumerate(GRID_TAUS):
             for j, kappa in enumerate(GRID_KAPPAS):
-                # Parametric volatility smile shape (parabolic in kappa, log-scale in tau)
-                iv = level - skew * kappa + 0.12 * kappa**2 + term * np.log(tau / 0.25)
-                # Add tiny local observational noise
+                # Volatility smile (curvature depends on regime)
+                smile_curvature = 0.16 if regime == 1 else 0.10
+                iv = effective_level - skew * kappa + smile_curvature * kappa**2 + term * np.log(tau / 0.25)
                 iv += np.random.normal(0, 0.001)
                 grid_iv[i, j] = iv
                 
-        # Clip surface values to ensure no negative volatility
-        grid_iv = np.clip(grid_iv, 0.01, 5.0)
+        # Clip surface values
+        grid_iv = np.clip(grid_iv, 0.02, 5.0)
         surfaces.append(grid_iv)
         
         # Generate daily timestamp string

@@ -1,6 +1,11 @@
 import argparse
 import time
 import sys
+import os
+
+# Add project root to path to support direct script execution
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from data.collector import collect_snapshot, start_scheduler
 
 def main():

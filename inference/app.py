@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import torch
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uvicorn
@@ -14,6 +16,7 @@ from data.processor import process_raw_snapshot, interpolate_to_grid, GRID_KAPPA
 from data.dataset import generate_synthetic_dataset
 from utils.plotting import plot_3d_surface, plot_residuals_heatmap, plot_cross_sections, fig_to_json
 from inference.monitor import DriftMonitor
+from models.architectures import HARRVLSTMHybrid
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -24,6 +27,14 @@ app = FastAPI(
     description="Low-latency REST endpoints for serving multi-step implied volatility surface forecasts.",
     version="1.0.0"
 )
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="inference/static"), name="static")
+
+@app.get("/")
+def read_root():
+    """Serve the interactive dashboard frontend."""
+    return FileResponse("inference/static/index.html")
 
 # Global variables
 config = {}
@@ -145,8 +156,10 @@ def health_check():
         model_type = "None"
     elif isinstance(model, MockVolatilityModel):
         model_type = "Mock"
+    elif isinstance(model, HARRVLSTMHybrid):
+        model_type = "HAR-RV + LSTM Hybrid"
     else:
-        model_type = "PyTorch Production"
+        model_type = type(model).__name__
     return {
         "status": "healthy",
         "ticker": config.get("ticker", "SPY"),
@@ -199,7 +212,7 @@ def predict_surface(payload: SnapshotPayload, include_plots: bool = Query(True, 
             processed_df["impliedVolatility"].values
         ) # Shape (7, 7)
         
-        # 3. Build input lookback sequence (Requires L=20 steps)
+        # 3. Build input lookback sequence (Requires L=20/60 steps)
         lookback = config.get("data", {}).get("lookback", 20)
         
         # In a real environment, we would load the last L-1 processed snapshots from data/raw/
@@ -208,8 +221,13 @@ def predict_surface(payload: SnapshotPayload, include_plots: bool = Query(True, 
         dummy_series, _ = generate_synthetic_dataset(num_days=lookback)
         dummy_series[-1] = current_grid
         
-        # Format to model shape: (Batch=1, Lookback=20, Channels=1, Moneyness=7, Expiry=7)
-        input_tensor = torch.from_numpy(dummy_series).float().unsqueeze(0).unsqueeze(2)
+        # Normalize if model has train_mean and train_std attributes
+        model_has_norm = not isinstance(model, MockVolatilityModel) and hasattr(model, "train_mean") and hasattr(model, "train_std")
+        if model_has_norm:
+            dummy_series_norm = (dummy_series - model.train_mean) / model.train_std
+            input_tensor = torch.from_numpy(dummy_series_norm).float().unsqueeze(0).unsqueeze(2)
+        else:
+            input_tensor = torch.from_numpy(dummy_series).float().unsqueeze(0).unsqueeze(2)
         
         # 4. Perform Inference
         # In real PyTorch model, we run forward pass
@@ -220,10 +238,19 @@ def predict_surface(payload: SnapshotPayload, include_plots: bool = Query(True, 
                 # Developer B's PyTorch model outputs prediction tensor
                 # Let's assume output shape is (1, max_horizon, 7, 7)
                 out_tensor = model(input_tensor)
+                
+                # Denormalize predicted outputs back to original scale if model was trained with normalization
+                if hasattr(model, "train_mean") and hasattr(model, "train_std"):
+                    out_tensor_denorm = out_tensor * model.train_std + model.train_mean
+                else:
+                    out_tensor_denorm = out_tensor
+                
+                # Convert back to numpy
+                out_numpy = out_tensor_denorm.cpu().numpy()
                 forecasts = {
-                    1: out_tensor[0, 0].numpy(),
-                    5: out_tensor[0, 4].numpy() if out_tensor.shape[1] >= 5 else out_tensor[0, -1].numpy(),
-                    10: out_tensor[0, 9].numpy() if out_tensor.shape[1] >= 10 else out_tensor[0, -1].numpy()
+                    1: out_numpy[0, 0],
+                    5: out_numpy[0, 4] if out_numpy.shape[1] >= 5 else out_numpy[0, -1],
+                    10: out_numpy[0, 9] if out_numpy.shape[1] >= 10 else out_numpy[0, -1]
                 }
                 
         # 5. Log prediction events to check drift
@@ -304,7 +331,7 @@ def trigger_retraining(background_tasks: BackgroundTasks):
             # Retrain using the active model name from config.
             # In a production context, this searches data/raw; here it defaults to synthetic if empty.
             from training.train import train_model
-            model_name = config.get("model", {}).get("name", "convlstm")
+            model_name = config.get("model", {}).get("name", "hybrid")
             
             logger.info(f"Retraining model type: {model_name}")
             train_model(config, model_name=model_name, use_synthetic=True)

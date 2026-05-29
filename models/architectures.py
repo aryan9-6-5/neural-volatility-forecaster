@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 import math
 
 class StackedLSTM(nn.Module):
@@ -270,3 +271,130 @@ class TransformerEncoderModel(nn.Module):
 
         # Reshape to standard forecast format: shape (B, h, M, N)
         return decoded.view(B, self.horizon, self.M, self.N)
+
+
+class HARRVLSTMHybrid(nn.Module):
+    """
+    HAR-RV + Gated LSTM Hybrid Model:
+    
+    Final Forecast (norm) = HAR-RV Base (norm) + σ(g) · LSTM Residual (norm)
+    
+    The learnable scalar gate g is initialized to -3 so that σ(g) ≈ 0.05 at
+    the start of training.  This ensures the HAR-RV base dominates early on
+    and the LSTM residual only contributes once it has learned useful structure.
+    
+    The raw residual tensor is stored as `self.last_residual` after every
+    forward pass so the training loop can add a zero-mean penalty:
+        λ_m · mean(residual)²
+    """
+    def __init__(self, grid_size=(7, 7), hidden_dim=64, num_layers=3, horizon=1):
+        super().__init__()
+        self.M, self.N = grid_size
+        self.horizon = horizon
+        
+        # Stored HAR-RV model parameters as buffers
+        self.register_buffer("har_coefs", torch.zeros(self.M, self.N, self.horizon, 3))
+        self.register_buffer("har_intercepts", torch.zeros(self.M, self.N, self.horizon))
+        
+        # LSTM sub-network to predict the residuals
+        self.lstm = StackedLSTM(grid_size=grid_size, hidden_dim=hidden_dim, num_layers=num_layers, horizon=horizon)
+        
+        # Learnable residual gate — initialized to -3 so σ(-3) ≈ 0.047
+        self.gate_logit = nn.Parameter(torch.tensor(-3.0))
+        
+        # Stored after each forward for the residual-mean penalty in the loss
+        self.last_residual = None
+
+    def fit_har(self, X: np.ndarray, y: np.ndarray):
+        """
+        Fits HAR-RV coefficients per grid cell from raw, unnormalized training sequences.
+        X: (N_samples, L, 1, M, N)
+        y: (N_samples, h, M, N)
+        """
+        from sklearn.linear_model import LinearRegression
+        N_samples, L, _, M, N = X.shape
+        if L < 20:
+            raise ValueError(f"HAR-RV requires lookback window L >= 20. Got L={L}")
+            
+        coefs_np = np.zeros((self.M, self.N, self.horizon, 3))
+        intercepts_np = np.zeros((self.M, self.N, self.horizon))
+        
+        for i in range(self.M):
+            for j in range(self.N):
+                features = []
+                targets = []
+                for s in range(N_samples):
+                    ts = X[s, :, 0, i, j]
+                    val_d = ts[-1]
+                    val_w = np.mean(ts[-5:])
+                    val_m = np.mean(ts[-20:])
+                    features.append([val_d, val_w, val_m])
+                    targets.append(y[s, :, i, j])
+                    
+                reg = LinearRegression()
+                reg.fit(np.array(features), np.array(targets))
+                
+                # coef_ shape is (horizon, 3) or (3,) if horizon=1
+                coef = reg.coef_
+                if self.horizon == 1:
+                    coef = coef[np.newaxis, :]  # shape (1, 3)
+                coefs_np[i, j] = coef
+                intercepts_np[i, j] = reg.intercept_
+                
+        self.har_coefs.copy_(torch.from_numpy(coefs_np).float())
+        self.har_intercepts.copy_(torch.from_numpy(intercepts_np).float())
+
+    def predict_har_tensor(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Predict HAR-RV surface on input tensor.
+        x: (B, L, 1, M, N) unnormalized
+        """
+        B, L, _, M, N = x.shape
+        device = x.device
+        
+        val_d = x[:, -1, 0, :, :]
+        val_w = torch.mean(x[:, -5:, 0, :, :], dim=1)
+        val_m = torch.mean(x[:, -20:, 0, :, :], dim=1)
+        
+        # Features: (B, M, N, 3)
+        features = torch.stack([val_d, val_w, val_m], dim=-1)
+        
+        har_pred = torch.zeros(B, self.horizon, M, N, device=device)
+        for i in range(M):
+            for j in range(N):
+                proj = torch.matmul(features[:, i, j], self.har_coefs[i, j].t())
+                har_pred[:, :, i, j] = proj + self.har_intercepts[i, j]
+                
+        return torch.clamp(har_pred, 0.01, 5.0)
+
+    @property
+    def gate_value(self) -> float:
+        """Current gate activation σ(g), for logging."""
+        return torch.sigmoid(self.gate_logit).item()
+
+    def forward(self, x):
+        """
+        x: Standardized sequences of shape (B, L, 1, M, N)
+        
+        Returns: forecast in normalized space (B, h, M, N)
+        """
+        # Denormalize x to compute the base HAR-RV predictions
+        train_mean = getattr(self, "train_mean", 0.0)
+        train_std = getattr(self, "train_std", 1.0)
+        x_unnorm = x * train_std + train_mean
+        
+        # Predict HAR-RV base in original scale, then normalize
+        har_pred_unnorm = self.predict_har_tensor(x_unnorm)
+        har_pred_norm = (har_pred_unnorm - train_mean) / train_std
+        
+        # Predict residuals with LSTM in normalized space
+        residual_pred_norm = self.lstm(x)
+        
+        # Store raw residual for the zero-mean penalty in the training loss
+        self.last_residual = residual_pred_norm
+        
+        # Apply gated residual correction: σ(g) ≈ 0.05 initially
+        gate = torch.sigmoid(self.gate_logit)
+        
+        return har_pred_norm + gate * residual_pred_norm
+

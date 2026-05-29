@@ -10,11 +10,14 @@ env/
 # Deep Learning / Data
 data/raw/
 data/processed/
+data/historical/
 *.h5
 *.pth
 *.pt
 *.onnx
 *.ckpt
+*.npy
+models/predictions/
 checkpoints/
 logs/
 .dvc/cache/
@@ -38,4 +41,5 @@ mlflow.db
 mlruns/
 tests/*.html
 tests/*.png
+documentation/plots/
 
