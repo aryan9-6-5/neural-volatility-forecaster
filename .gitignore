@@ -32,3 +32,10 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# MLflow and Visuals
+mlflow.db
+mlruns/
+tests/*.html
+tests/*.png
+

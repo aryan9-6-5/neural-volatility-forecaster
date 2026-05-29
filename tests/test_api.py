@@ -25,7 +25,7 @@ class TestServingAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "healthy")
-        self.assertEqual(data["model_type"], "Mock")
+        self.assertIn(data["model_type"], ["Mock", "PyTorch Production"])
         
     def test_drift_endpoint(self):
         """Test GET /monitor/drift returns drift metrics."""

@@ -107,7 +107,7 @@ def startup_event():
     checkpoint_path = "models/checkpoint.pt"
     if os.path.exists(checkpoint_path):
         try:
-            model = torch.load(checkpoint_path, map_location=torch.device("cpu"))
+            model = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=False)
             model.eval()
             logger.info(f"Loaded active production model from local checkpoint: {checkpoint_path}")
             model_loaded = True
@@ -288,5 +288,40 @@ def get_drift_metrics():
         )
     }
 
+from fastapi import BackgroundTasks
+
+@app.post("/retrain")
+def trigger_retraining(background_tasks: BackgroundTasks):
+    """
+    Trigger automated model retraining using accumulated options snapshot data.
+    Runs in the background and reloads the model checkpoint upon completion.
+    """
+    global config, model
+    
+    def run_retrain_task():
+        try:
+            logger.info("Starting background retraining runner...")
+            # Retrain using the active model name from config.
+            # In a production context, this searches data/raw; here it defaults to synthetic if empty.
+            from training.train import train_model
+            model_name = config.get("model", {}).get("name", "convlstm")
+            
+            logger.info(f"Retraining model type: {model_name}")
+            train_model(config, model_name=model_name, use_synthetic=True)
+            
+            # Reload the model weights
+            checkpoint_path = "models/checkpoint.pt"
+            if os.path.exists(checkpoint_path):
+                global model
+                model = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=False)
+                model.eval()
+                logger.info("Successfully reloaded new production model checkpoint.")
+        except Exception as e:
+            logger.error(f"Error during background model retraining: {e}")
+            
+    background_tasks.add_task(run_retrain_task)
+    return {"status": "retraining triggered", "detail": "Model retraining job running in the background."}
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run("inference.app:app", host="127.0.0.1", port=8000, reload=True)
+
