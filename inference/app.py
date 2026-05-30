@@ -239,7 +239,7 @@ def predict_surface(payload: SnapshotPayload, include_plots: bool = Query(True, 
             forecasts = model(input_tensor)
         else:
             with torch.no_grad():
-                # Developer B's PyTorch model outputs prediction tensor
+                # PyTorch model outputs prediction tensor
                 # Let's assume output shape is (1, max_horizon, 7, 7)
                 out_tensor = model(input_tensor)
                 

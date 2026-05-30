@@ -1,6 +1,6 @@
 # Volatility Surface Data Contract Specification
 
-This document freezes the data layout, normalization rules, coordinate indexing, and metadata specifications for the Neural Volatility Surface Forecaster. Decoupling the data engineering pipeline (Developer A) from the modeling framework (Developer B) requires strict adherence to this contract.
+This document freezes the data layout, normalization rules, coordinate indexing, and metadata specifications for the Neural Volatility Surface Forecaster. Decoupling the data engineering pipeline from the modeling framework requires strict adherence to this contract.
 
 ---
 
@@ -117,9 +117,9 @@ During run orchestration or training pipeline execution, the following preproces
 
 ---
 
-## 8. Developer B Onboarding Reading List
+## 8. Quantitative Engineering Reading List
 
-Before editing the codebase or instantiating training scripts, Developer B must read the following documentation files in order:
+Before editing the codebase or instantiating training scripts, engineers must read the following documentation files in order:
 
 1. **[README.md](file:///d:/projects/neural-volatility-forecaster/README.md)**: High-level overview of the project scope, the Black-Scholes-Merton (BSM) analytical formulas, and numerical inversion solvers.
 2. **[System_Design.md](file:///d:/projects/neural-volatility-forecaster/documentation/System_Design.md)**: Details the modular 7-layer architecture, highlighting Layer 4 (Model Training) and Layer 5 (Evaluation) directories and logic.

@@ -96,64 +96,64 @@ Markets are highly non-stationary. To counter performance degradation during reg
 ### Week-by-Week Checklist
 
 #### Week 1-2: Data Foundation
-- [ ] Choose primary ticker (SPY for Medvedev comparison)
-- [ ] Run quick yfinance test (2-3 hours validation)
-- [ ] Build options chain collector with yfinance
-- [ ] Implement APScheduler for daily 4:05 PM collection
-- [ ] Build moneyness normalization: $\kappa = \ln(K/F)$
-- [ ] Build expiry standardization to 7 standard buckets
-- [ ] Implement all arbitrage filters (calendar, butterfly, hard)
-- [ ] Implement RBF interpolation to $7 \times 7$ grid
-- [ ] Build one surface, visualize with Plotly 3D (validation)
-- [ ] Collect minimum 6 months of daily snapshots
-- [ ] Store as Parquet files with timestamps
-- [ ] Document data quality statistics (missing rate, coverage)
+- `[x]` Choose primary ticker (SPY for Medvedev comparison)
+- `[x]` Run quick yfinance test (2-3 hours validation)
+- `[x]` Build options chain collector with yfinance
+- `[x]` Implement APScheduler for daily 4:05 PM collection
+- `[x]` Build moneyness normalization: $\kappa = \ln(K/F)$
+- `[x]` Build expiry standardization to 7 standard buckets
+- `[x]` Implement all arbitrage filters (calendar, butterfly, hard)
+- `[x]` Implement RBF interpolation to $7 \times 7$ grid
+- `[x]` Build one surface, visualize with Plotly 3D (validation)
+- `[x]` Collect minimum 6 months of daily snapshots
+- `[x]` Store as Parquet files with timestamps
+- `[x]` Document data quality statistics (missing rate, coverage)
 
 #### Week 3-4: Baselines First
-- [ ] Implement naive random walk baseline
-- [ ] Implement historical mean baseline
-- [ ] Implement exponential smoothing baseline
-- [ ] Implement GARCH(1,1) per grid cell
-- [ ] Implement HAR-RV baseline
-- [ ] Evaluate all baselines on temporal test set
-- [ ] Store all baseline metrics in MLflow
-- [ ] Verify baselines produce reasonable numbers
-- [ ] Create initial baseline results table
-- [ ] Fix any data pipeline issues revealed by baselines
+- `[x]` Implement naive random walk baseline
+- `[x]` Implement historical mean baseline
+- `[x]` Implement exponential smoothing baseline
+- `[x]` Implement GARCH(1,1) per grid cell
+- `[x]` Implement HAR-RV baseline
+- `[x]` Evaluate all baselines on temporal test set
+- `[x]` Store all baseline metrics in MLflow
+- `[x]` Verify baselines produce reasonable numbers
+- `[x]` Create initial baseline results table
+- `[x]` Fix any data pipeline issues revealed by baselines
 
 #### Week 5-6: Model Training
-- [ ] Implement LSTM baseline in PyTorch
-- [ ] Implement ConvLSTM in PyTorch
-- [ ] Implement `SmoothnessRegularizedLoss` class
-- [ ] Set up MLflow experiment tracking
-- [ ] Define temporal train/val/test split (60/20/20)
-- [ ] Train LSTM with MSE loss (5 seeds)
-- [ ] Train ConvLSTM with MSE loss (5 seeds)
-- [ ] Train ConvLSTM with MSE + Smoothness loss (5 seeds)
-- [ ] Log all experiments to MLflow
-- [ ] Save model checkpoints per epoch
-- [ ] Monitor for overfitting (early stopping patience=15)
-- [ ] Implement gradient clipping (max norm 1.0)
+- `[x]` Implement LSTM baseline in PyTorch
+- `[x]` Implement ConvLSTM in PyTorch
+- `[x]` Implement `SmoothnessRegularizedLoss` class
+- `[x]` Set up MLflow experiment tracking
+- `[x]` Define temporal train/val/test split (60/20/20)
+- `[x]` Train LSTM with MSE loss (5 seeds)
+- `[x]` Train ConvLSTM with MSE loss (5 seeds)
+- `[x]` Train ConvLSTM with MSE + Smoothness loss (5 seeds)
+- `[x]` Log all experiments to MLflow
+- `[x]` Save model checkpoints per epoch
+- `[x]` Monitor for overfitting (early stopping patience=15)
+- `[x]` Implement gradient clipping (max norm 1.0)
 
 #### Week 7: Comprehensive Evaluation
-- [ ] Compute all metrics: RMSE, MAE, MAPE, DA, TV, AV
-- [ ] Decompose errors by 6 surface regions
-- [ ] Generate full results table with mean $\pm$ std
-- [ ] Generate 3D actual vs predicted surface plots
-- [ ] Generate error residual heatmaps
-- [ ] Generate volatility smile cross-section comparisons
-- [ ] Generate term structure cross-section comparisons
-- [ ] Run all 4 ablation studies
-- [ ] Run Wilcoxon signed-rank significance tests
-- [ ] Document all findings clearly
+- `[x]` Compute all metrics: RMSE, MAE, MAPE, DA, TV, AV
+- `[x]` Decompose errors by 6 surface regions
+- `[x]` Generate full results table with mean $\pm$ std
+- `[x]` Generate 3D actual vs predicted surface plots
+- `[x]` Generate error residual heatmaps
+- `[x]` Generate volatility smile cross-section comparisons
+- `[x]` Generate term structure cross-section comparisons
+- `[x]` Run all 4 ablation studies
+- `[x]` Run Wilcoxon signed-rank significance tests
+- `[x]` Document all findings clearly
 
 #### Week 8-9: Paper Writing
-- [ ] Write Abstract (250 words)
-- [ ] Write Introduction with clear research gap
-- [ ] Write Literature Review citing Medvedev & Wang correctly
-- [ ] Write Methodology
-- [ ] Write Data Description with statistics table
-- [ ] Write Experimental Setup
-- [ ] Write Results with all tables and figures
-- [ ] Write Discussion and limitations
-- [ ] Compile LaTeX source and submit
+- `[x]` Write Abstract (250 words)
+- `[x]` Write Introduction with clear research gap
+- `[x]` Write Literature Review citing Medvedev & Wang correctly
+- `[x]` Write Methodology
+- `[x]` Write Data Description with statistics table
+- `[x]` Write Experimental Setup
+- `[x]` Write Results with all tables and figures
+- `[x]` Write Discussion and limitations
+- `[x]` Compile LaTeX source and submit

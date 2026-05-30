@@ -105,14 +105,13 @@ The core machine learning pipeline, econometric baselines, training scripts, uni
 | **Layer 7: Serving & Monitoring**| 100% | Complete | [app.py](file:///d:/projects/neural-volatility-forecaster/inference/app.py), [monitor.py](file:///d:/projects/neural-volatility-forecaster/inference/monitor.py) |
 | **Infrastructure & CI/CD** | 100% | Complete | [Dockerfile](file:///d:/projects/neural-volatility-forecaster/Dockerfile), [docker-compose.yaml](file:///d:/projects/neural-volatility-forecaster/docker-compose.yaml), [.github/workflows/ci.yml](file:///d:/projects/neural-volatility-forecaster/.github/workflows/ci.yml) |
 
-### 5.2 Phase 2 Achievements (Developer B)
+### 5.2 Core Platform Capabilities
 
-All tasks assigned to Developer B have been implemented and validated:
-1. **Econometric Baselines**: Created Random Walk, Historical Mean, Exponential Smoothing, GARCH(1,1), and HAR-RV benchmarks in `models/baselines.py`.
-2. **Model Architectures**: Built Stacked LSTM, ConvLSTM, and Transformer Encoder PyTorch models in `models/architectures.py` supporting standard multi-step sequence inputs.
-3. **Composite Loss Functions**: Integrated custom smoothness penalties for strike/expiry dimensions and no-arbitrage spread constraints in `models/loss.py`.
-4. **Research Training & Benchmarking**: Created comprehensive train/val/test execution loop in `training/train.py` with region-specific error breakdown and MLflow logs.
-5. **Colab Notebook**: Written a self-contained Google Colab notebook (`training/colab_training.ipynb`) configured for GPU retraining.
-6. **Production Deployment**: Integrated trained PyTorch checkpoints into the FastAPI uvicorn runner, along with a `POST /retrain` background task trigger in `inference/app.py`.
+The system fully integrates the following advanced quantitative and engineering features:
+1. **Econometric Baselines**: Includes Random Walk, Historical Mean, Exponential Smoothing, GARCH(1,1), and HAR-RV benchmarks for rigorous forecasting comparisons.
+2. **Deep Learning Architectures**: Stacked LSTM, ConvLSTM, and Transformer Encoder PyTorch models designed for multi-step volatility surface forecasts.
+3. **Financial Regularization**: Composite loss functions that enforce spatial smoothness constraints along log-moneyness and time-to-expiry dimensions alongside no-arbitrage bounds.
+4. **Performance Benchmarking**: Unified training, validation, and test execution loop with region-specific error decomposition (ATM, OTM, wings) and MLflow tracking.
+5. **Interactive UI Serving**: High-fidelity dark-theme serving engine mounted with Gzip payload compression, real-time drift monitor logs, and a vertical retraining timeline.
 
 

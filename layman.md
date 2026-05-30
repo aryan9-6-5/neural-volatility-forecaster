@@ -14,32 +14,27 @@ Since people buy insurance for different price levels (e.g., protection against 
 
 ---
 
-## 2. What Work is Completed? (Progress: ~45%)
+## 2. Platform Core Architecture
 
-We have built the entire **Data Foundation**, **Cleaning Pipeline**, **Web Serving API**, and **Safety Checks**. 
-
-Think of this like building a water treatment and delivery system: we built the reservoir, the pipes, the filtration plant, the delivery trucks, and the water testing lab. The only thing left to build is the specialized filtration chemistry (the final AI models), which Developer B will design.
+We have built a production-grade **Data Foundation**, **Cleaning Pipeline**, **Deep Learning Model Engine**, **Serving API**, and **Automated Quality Checks**.
 
 ### Summary of what we built:
-1. **The Ingestor (Layer 1)**: A script that automatically downloads real-time option prices from Yahoo Finance every market day at 4:05 PM and saves them securely in Parquet files (a highly compressed data format).
+1. **The Ingestor (Layer 1)**: A scheduled scheduler module that downloads real-time option prices from Yahoo Finance every market day at 4:05 PM and persists them securely in compressed Parquet databases.
 2. **The Cleaner & Sculptor (Layer 2)**:
-   - Raw market quotes are messy. They contain typos, illiquid options, and pricing anomalies that violate financial rules (e.g., calendar arbitrage, where long-term insurance is priced cheaper than short-term insurance). We built filters to throw away these bad records.
-   - Options trade at scattered strikes and dates. To feed them to a neural network, we must organize them. We built an **RBF Interpolator** (a mathematical grid-fitting tool) that takes scattered data points and projects them onto a neat, standard **$7 \times 7$ grid** (like a digital image with 49 pixels), representing maturities from 1 week to 1 year and strikes from deep out-of-the-money puts to deep out-of-the-money calls.
-3. **The Web Server (Layer 7 serving)**: A FastAPI web application that accepts raw option data, cleans and standardizes it, runs it through the AI model, and returns predicted 3D surfaces alongside interactive 3D visualizations.
-   - *Resilience*: Since the real AI model isn't trained yet, we built a **Smart Mock Model** that wiggles synthetic surfaces realistically. This allowed us to test the entire server and ensure it functions perfectly before the modeling begins.
-4. **The Guard (Layer 7 monitoring)**: Markets change. If the stock market crashes or enters a new regime, the AI's old training becomes obsolete. We built a **Drift Monitor** using a mathematical comparison called **KL Divergence** to calculate if incoming options data is drifting too far from what the model originally learned, triggering a retraining alert.
-5. **The Safety Net (CI/CD and Testing)**: 
-   - We wrote automated testing scripts that check if our pricing math is correct.
-   - We configured **Docker** and **Docker Compose** to run the server and an **MLflow dashboard** (an experiment tracker) inside portable containers.
-   - We set up **GitHub Actions CI** so that every time a developer commits code, the test suite runs automatically in the cloud to guarantee nothing is broken.
+   - Raw market quotes are messy and contain illiquid options or spread errors. The processing filters discard contracts violating fundamental no-arbitrage bounds (e.g. calendar spread spread inequalities).
+   - An RBF thin-plate spline interpolator maps scattered strike/date quotes onto a neat, standardized **$7 \times 7$ grid** representing expiries from 1 week to 1 year and log-moneyness levels from tail-OTM puts to tail-OTM calls.
+3. **The Deep Learning Engine (Layer 4 & 5)**: High-performance stacked LSTM, ConvLSTM, and Transformer Encoder networks trained under custom composite loss functions that enforce spatial surface smoothness alongside structural reconstruction.
+4. **The Web Server (Layer 7 serving)**: A low-latency FastAPI application that receives raw chain inputs, standardizes the surfaces, runs GPU-accelerated forward predictions, and renders interactively styled 3D Plotly visualizations. It is optimized with Gzip payload compression for instant load times.
+5. **The Quality Guard (Layer 7 monitoring)**: Real-time drift detection that measures Kullback-Leibler (KL) Divergence and RMSE. If options incoming distribution drifts beyond predefined limits, the monitor triggers an automated training pipeline.
+6. **Continuous Integration & Testing**: Integrated unit testing structures (`pytest`), portable containerization (`docker-compose`), and automated GitHub Actions CI.
 
 ---
 
 ## 3. How Did We Do It? (The Technical Implementation)
 
-We created a modular and isolated architecture to avoid merge conflicts:
+We created a highly modular and decoupled architecture:
 
-- **[`configs/base_config.yaml`](file:///d:/projects/neural-volatility-forecaster/configs/base_config.yaml)**: The system's "control panel". It defines the standard $7 \times 7$ coordinate boundaries, file directories, learning rates, and drift alerts. Both developers share this file.
+- **[`configs/base_config.yaml`](file:///d:/projects/neural-volatility-forecaster/configs/base_config.yaml)**: The system's "control panel". It defines the standard $7 \times 7$ coordinate boundaries, file directories, learning rates, and drift alerts. All components share this unified configuration.
 - **[`data/collector.py`](file:///d:/projects/neural-volatility-forecaster/data/collector.py)**: Fetches options, handles dynamic risk-free interest rates (using the US 13-week T-Bill index `^IRX`), and handles ETF dividend yields (correcting percentage-to-decimal errors dynamically).
 - **[`data/processor.py`](file:///d:/projects/neural-volatility-forecaster/data/processor.py)**: Performs mathematical Black-Scholes inversion using a Newton-Raphson numerical solver to extract volatilities, checks calendar spread inequalities, and maps scattered points to the grid.
 - **[`data/dataset.py`](file:///d:/projects/neural-volatility-forecaster/data/dataset.py)**: Contains the sequence generator for neural network training and a CSV/Parquet importer for historical data.

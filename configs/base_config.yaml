@@ -24,7 +24,7 @@ data:
   # Expiry tau: (T - t) / 252 (in years)
   expiry_grid: [0.01923, 0.03846, 0.08333, 0.16667, 0.25, 0.5, 1.0] # 1w, 2w, 1m, 2m, 3m, 6m, 1y
 
-# Model parameters (to be expanded by Developer B)
+# Model parameters
 model:
   name: "hybrid"           # active production model: lstm | transformer | hybrid
   lstm:
