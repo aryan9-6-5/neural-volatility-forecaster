@@ -11,6 +11,7 @@ services:
       - ./data:/app/data
       - ./models:/app/models
       - ./configs:/app/configs
+      - ./inference/static:/app/inference/static
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow-server:5000
     depends_on:

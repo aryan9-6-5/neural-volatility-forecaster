@@ -1,679 +1,404 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neural Volatility Surface Forecaster</title>
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Plotly.js CDN -->
-    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
-    <style>
-        :root {
-            --bg-color: #0b0f19;
-            --panel-bg: rgba(17, 24, 39, 0.7);
-            --border-color: rgba(255, 255, 255, 0.08);
-            --primary: #636efa;
-            --primary-glow: rgba(99, 110, 250, 0.4);
-            --success: #00cc96;
-            --warning: #ffa15a;
-            --danger: #ef553b;
-            --text-main: #f3f4f6;
-            --text-muted: #9ca3af;
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-main);
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        header {
-            background-color: rgba(17, 24, 39, 0.9);
-            border-bottom: 1px solid var(--border-color);
-            padding: 1rem 2rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            z-index: 10;
-        }
-
-        header h1 {
-            font-size: 1.25rem;
-            font-weight: 600;
-            background: linear-gradient(135deg, #a5b4fc, #636efa);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        header .status {
-            display: flex;
-            align-items: center;
-            gap: 1.5rem;
-            font-size: 0.85rem;
-        }
-
-        .status-badge {
-            background: rgba(0, 204, 150, 0.15);
-            color: var(--success);
-            padding: 0.25rem 0.75rem;
-            border-radius: 9999px;
-            border: 1px solid rgba(0, 204, 150, 0.3);
-            font-weight: 500;
-        }
-
-        .container {
-            flex: 1;
-            display: flex;
-            overflow: hidden;
-        }
-
-        /* Sidebar options Input Panel */
-        .sidebar {
-            width: 380px;
-            background-color: rgba(17, 24, 39, 0.6);
-            border-right: 1px solid var(--border-color);
-            padding: 1.5rem;
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-            overflow-y: auto;
-            backdrop-filter: blur(10px);
-        }
-
-        .panel-title {
-            font-size: 0.95rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--text-muted);
-            margin-bottom: 0.5rem;
-            border-left: 3px solid var(--primary);
-            padding-left: 0.5rem;
-        }
-
-        .form-group {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-            margin-bottom: 1rem;
-        }
-
-        .form-group label {
-            font-size: 0.8rem;
-            font-weight: 500;
-            color: var(--text-muted);
-        }
-
-        .form-control {
-            background-color: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border-color);
-            color: var(--text-main);
-            padding: 0.6rem 0.8rem;
-            border-radius: 6px;
-            font-family: inherit;
-            font-size: 0.9rem;
-            transition: all 0.2s;
-        }
-
-        .form-control:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 2px var(--primary-glow);
-        }
-
-        .contracts-editor {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-
-        .contracts-textarea {
-            flex: 1;
-            width: 100%;
-            height: 250px;
-            font-family: monospace;
-            font-size: 0.75rem;
-            resize: none;
-            background-color: #0c101a;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            color: #38bdf8;
-            padding: 0.75rem;
-        }
-
-        .btn {
-            background-color: var(--primary);
-            color: white;
-            border: none;
-            padding: 0.75rem 1.25rem;
-            border-radius: 6px;
-            font-weight: 600;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .btn:hover {
-            opacity: 0.9;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px var(--primary-glow);
-        }
-
-        .btn-success {
-            background-color: var(--success);
-        }
-
-        .btn-success:hover {
-            box-shadow: 0 4px 12px rgba(0, 204, 150, 0.4);
-        }
-
-        /* Main Workspace */
-        .main-content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            background-color: #080b11;
-        }
-
-        /* Tabs Navigation */
-        .tabs-header {
-            display: flex;
-            background-color: rgba(17, 24, 39, 0.4);
-            border-bottom: 1px solid var(--border-color);
-            padding: 0 1rem;
-        }
-
-        .tab-btn {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            padding: 1rem 1.5rem;
-            font-size: 0.9rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-            border-bottom: 2px solid transparent;
-        }
-
-        .tab-btn:hover {
-            color: var(--text-main);
-        }
-
-        .tab-btn.active {
-            color: var(--primary);
-            border-bottom-color: var(--primary);
-            font-weight: 600;
-        }
-
-        /* View Panels */
-        .tab-body {
-            flex: 1;
-            overflow: hidden;
-            display: none;
-            padding: 1.5rem;
-        }
-
-        .tab-body.active {
-            display: flex;
-            flex-direction: column;
-        }
-
-        /* Chart container */
-        .chart-box {
-            flex: 1;
-            background-color: var(--panel-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            position: relative;
-            overflow: hidden;
-            backdrop-filter: blur(10px);
-        }
-
-        .chart-loader {
-            display: none;
-            flex-direction: column;
-            align-items: center;
-            gap: 1rem;
-            color: var(--text-muted);
-        }
-
-        .spinner {
-            width: 40px;
-            height: 40px;
-            border: 4px solid rgba(255, 255, 255, 0.1);
-            border-left-color: var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* Monitor Tab Dashboard elements */
-        .monitor-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1.5rem;
-            margin-bottom: 1.5rem;
-        }
-
-        .monitor-card {
-            background-color: var(--panel-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 1.5rem;
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-        }
-
-        .monitor-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .monitor-card h3 {
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--text-muted);
-        }
-
-        .monitor-value {
-            font-size: 2.25rem;
-            font-weight: 700;
-            color: var(--text-main);
-        }
-
-        .progress-bar-container {
-            width: 100%;
-            background-color: rgba(255, 255, 255, 0.05);
-            height: 10px;
-            border-radius: 9999px;
-            overflow: hidden;
-        }
-
-        .progress-bar {
-            height: 100%;
-            background-color: var(--primary);
-            width: 0%;
-            transition: width 0.5s ease-out;
-        }
-
-        .progress-bar.success { background-color: var(--success); }
-        .progress-bar.warning { background-color: var(--warning); }
-        .progress-bar.danger { background-color: var(--danger); }
-
-        .retrain-panel {
-            background-color: var(--panel-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 2rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            backdrop-filter: blur(10px);
-        }
-
-        .retrain-desc h3 {
-            font-size: 1.1rem;
-            margin-bottom: 0.5rem;
-            font-weight: 600;
-        }
-
-        .retrain-desc p {
-            font-size: 0.85rem;
-            color: var(--text-muted);
-        }
-
-        .retrain-status-text {
-            font-size: 0.9rem;
-            font-weight: 500;
-            margin-top: 0.5rem;
-            color: var(--warning);
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Neural implied volatility surface forecaster — real-time inference, drift monitoring, and model re-calibration dashboard.">
+  <title>VolForecaster — Neural Surface Engine</title>
+  <link rel="stylesheet" href="/static/css/main.css">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 </head>
 <body>
 
-    <header>
-        <h1><span>⚡</span> Implied Volatility Surface Forecaster</h1>
-        <div class="status">
-            <div>Model State: <span id="model-state-badge" class="status-badge">Checking...</span></div>
-        </div>
-    </header>
-
-    <div class="container">
-        <!-- Sidebar Control Panel -->
-        <div class="sidebar">
-            <div class="panel-title">Option Chain Snapshot</div>
-            
-            <div class="form-group">
-                <label for="spot_price">Underlying Spot Price ($)</label>
-                <input type="number" step="0.01" id="spot_price" class="form-control" value="745.64">
-            </div>
-
-            <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
-                <div>
-                    <label for="risk_free_rate">Risk-free Rate (r)</label>
-                    <input type="number" step="0.001" id="risk_free_rate" class="form-control" value="0.035">
-                </div>
-                <div>
-                    <label for="dividend_yield">Dividend Yield (q)</label>
-                    <input type="number" step="0.001" id="dividend_yield" class="form-control" value="0.010">
-                </div>
-            </div>
-
-            <div class="contracts-editor">
-                <label for="contracts_json" style="font-size: 0.8rem; font-weight: 500; color: var(--text-muted);">Option Chain Contracts (JSON)</label>
-                <textarea id="contracts_json" class="contracts-textarea"></textarea>
-            </div>
-
-            <button id="predict-btn" class="btn">
-                <span>🔮</span> Forecast Surface
-            </button>
-        </div>
-
-        <!-- Main View Area -->
-        <div class="main-content">
-            <div class="tabs-header">
-                <button class="tab-btn active" onclick="switchTab('surface_3d')">3D Volatility Surface</button>
-                <button class="tab-btn" onclick="switchTab('evolution_heatmap')">Surface Evolution Heatmap</button>
-                <button class="tab-btn" onclick="switchTab('cross_sections')">Cross-Sectional Smiles</button>
-                <button class="tab-btn" onclick="switchTab('monitoring')">MLOps Monitor & retraining</button>
-            </div>
-
-            <!-- Tab 3D Surface -->
-            <div id="tab-surface_3d" class="tab-body active">
-                <div class="chart-box">
-                    <div id="chart-loader-3d" class="chart-loader"><div class="spinner"></div><p>Calculating forecast surfaces...</p></div>
-                    <div id="plotly-surface_3d" style="width:100%; height:100%;"></div>
-                </div>
-            </div>
-
-            <!-- Tab Heatmap -->
-            <div id="tab-evolution_heatmap" class="tab-body">
-                <div class="chart-box">
-                    <div id="chart-loader-heatmap" class="chart-loader"><div class="spinner"></div><p>Calculating residuals...</p></div>
-                    <div id="plotly-evolution_heatmap" style="width:100%; height:100%;"></div>
-                </div>
-            </div>
-
-            <!-- Tab Cross Sections -->
-            <div id="tab-cross_sections" class="tab-body">
-                <div class="chart-box">
-                    <div id="chart-loader-cross" class="chart-loader"><div class="spinner"></div><p>Slicing volatility smiles...</p></div>
-                    <div id="plotly-cross_sections" style="width:100%; height:100%;"></div>
-                </div>
-            </div>
-
-            <!-- Tab MLOps Monitor -->
-            <div id="tab-monitoring" class="tab-body">
-                <div class="monitor-grid">
-                    <!-- Data Drift Card -->
-                    <div class="monitor-card">
-                        <div class="monitor-header">
-                            <h3>Kullback-Leibler Data Drift (KL)</h3>
-                            <span id="kl-status" class="status-badge">Normal</span>
-                        </div>
-                        <div id="kl-value" class="monitor-value">0.000</div>
-                        <div class="progress-bar-container">
-                            <div id="kl-progress" class="progress-bar success" style="width: 0%"></div>
-                        </div>
-                        <div style="font-size: 0.8rem; color: var(--text-muted);">Critical threshold: 0.500</div>
-                    </div>
-
-                    <!-- Performance Card -->
-                    <div class="monitor-card">
-                        <div class="monitor-header">
-                            <h3>Rolling Forecast Error (RMSE)</h3>
-                            <span id="rmse-status" class="status-badge">Optimal</span>
-                        </div>
-                        <div id="rmse-value" class="monitor-value">0.0000</div>
-                        <div class="progress-bar-container">
-                            <div id="rmse-progress" class="progress-bar success" style="width: 0%"></div>
-                        </div>
-                        <div style="font-size: 0.8rem; color: var(--text-muted);"><span id="rmse-threshold-text">retraining limit: --</span></div>
-                    </div>
-                </div>
-
-                <div class="retrain-panel">
-                    <div class="retrain-desc">
-                        <h3>Automated Retraining Engine</h3>
-                        <p>Triggers an asynchronous model update using accumulated market snapshots in the background.</p>
-                        <div id="retrain-status" class="retrain-status-text"></div>
-                    </div>
-                    <button id="retrain-btn" class="btn btn-success">
-                        <span>⚙️</span> Retrain Model
-                    </button>
-                </div>
-            </div>
-        </div>
+  <!-- ================================================================
+       SIDEBAR
+       ================================================================ -->
+  <aside class="sidebar">
+    <div class="logo-block">
+      <svg class="volatility-wave" viewBox="0 0 100 30" width="36" height="15" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round">
+        <path d="M0,15 Q12.5,5 25,15 T50,15 T75,15 T100,15">
+          <animate attributeName="d" 
+                   values="M0,15 Q12.5,5 25,15 T50,15 T75,15 T100,15;
+                           M0,15 Q12.5,25 25,15 T50,15 T75,15 T100,15;
+                           M0,15 Q12.5,5 25,15 T50,15 T75,15 T100,15" 
+                   dur="3.2s" repeatCount="indefinite"/>
+        </path>
+      </svg>
+      <div>
+        <h2>VolForecaster</h2>
+        <p>neural surface engine</p>
+      </div>
     </div>
 
-    <script>
-        // Sample options contracts JSON payload (spanning different expiries to prevent rank singular matrix errors)
-        const SAMPLE_CONTRACTS = [
-            {"strike": 700.0, "expiry": "2026-06-01", "option_type": "put", "bid": 2.50, "ask": 2.60, "volume": 10},
-            {"strike": 720.0, "expiry": "2026-06-01", "option_type": "put", "bid": 5.00, "ask": 5.20, "volume": 20},
-            {"strike": 740.0, "expiry": "2026-06-01", "option_type": "call", "bid": 12.00, "ask": 12.20, "volume": 15},
-            {"strike": 760.0, "expiry": "2026-06-01", "option_type": "call", "bid": 4.00, "ask": 4.10, "volume": 30},
-            {"strike": 780.0, "expiry": "2026-06-01", "option_type": "call", "bid": 1.00, "ask": 1.05, "volume": 5},
-            {"strike": 700.0, "expiry": "2026-09-01", "option_type": "put", "bid": 15.00, "ask": 15.50, "volume": 12},
-            {"strike": 750.0, "expiry": "2026-09-01", "option_type": "call", "bid": 25.00, "ask": 25.50, "volume": 25},
-            {"strike": 800.0, "expiry": "2026-09-01", "option_type": "call", "bid": 8.00, "ask": 8.20, "volume": 8}
-        ];
+    <nav class="nav-container">
+      <a class="nav-item active" data-page="dashboard">Dashboard</a>
+      <a class="nav-item" data-page="forecast">Forecast</a>
+      <a class="nav-item" data-page="drift">Drift Monitor <span class="badge" id="drift-badge"></span></a>
+      <a class="nav-item" data-page="recalibrate">Re-calibrate <span class="badge" id="recal-badge"></span></a>
+    </nav>
 
-        document.getElementById("contracts_json").value = JSON.stringify(SAMPLE_CONTRACTS, null, 2);
+    <div class="sidebar-footer">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="footer-status">Connecting...</span>
+    </div>
+  </aside>
 
-        // Fetch model status on startup
-        async function fetchHealth() {
-            try {
-                const response = await fetch("/health");
-                const data = await response.json();
-                const badge = document.getElementById("model-state-badge");
-                badge.innerText = data.model_type;
-                if (data.model_type === "PyTorch Production") {
-                    badge.style.background = "rgba(0, 204, 150, 0.15)";
-                    badge.style.color = "var(--success)";
-                    badge.style.borderColor = "rgba(0, 204, 150, 0.3)";
-                } else {
-                    badge.style.background = "rgba(255, 161, 90, 0.15)";
-                    badge.style.color = "var(--warning)";
-                    badge.style.borderColor = "rgba(255, 161, 90, 0.3)";
-                }
-            } catch (err) {
-                console.error("Failed to fetch health check:", err);
-            }
-        }
+  <!-- ================================================================
+       MAIN AREA
+       ================================================================ -->
+  <main class="main-area">
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 id="topbar-title">Dashboard</h1>
+        <p id="topbar-sub">System overview</p>
+      </div>
+    </header>
 
-        // Fetch drift metrics
-        async function fetchDrift() {
-            try {
-                const response = await fetch("/monitor/drift");
-                const data = await response.json();
+    <div class="content-viewport">
+
+      <!-- ============================================================
+           PAGE 1: DASHBOARD
+           ============================================================ -->
+      <div id="page-dashboard" class="page-content">
+
+        <!-- Alert Banner -->
+        <div class="alert-banner" id="drift-alert-banner">
+          <span class="alert-banner-text" id="drift-alert-text">Drift detected — retraining recommended.</span>
+          <button id="banner-recal-btn">Re-calibrate</button>
+        </div>
+
+        <!-- Asymmetric Hero Area (Visual Hierarchy) -->
+        <div class="split-row">
+          <!-- Left Wide: Hero Metrics Panel -->
+          <div class="panel hero-metrics-panel">
+            <div class="panel-body">
+              <div class="hero-kpi-block">
+                <div class="hero-kpi-main">
+                  <div class="metric-label">Core Data Drift (KL Divergence)</div>
+                  <div class="hero-kpi-value-row">
+                    <span class="hero-kpi-value" id="card-kl">--</span>
+                    <span class="hero-kpi-badge" id="card-kl-badge">OK</span>
+                  </div>
+                  <div class="metric-sub" id="card-kl-sub">threshold: 0.50</div>
+                </div>
                 
-                // Update KL
-                const klVal = data.rolling_kl_divergence;
-                document.getElementById("kl-value").innerText = klVal.toFixed(4);
-                const klProgress = document.getElementById("kl-progress");
-                const klPct = Math.min(100, (klVal / data.kl_threshold) * 100);
-                klProgress.style.width = `${klPct}%`;
+                <div class="hero-kpi-divider"></div>
                 
-                const klStatus = document.getElementById("kl-status");
-                if (klVal > data.kl_threshold) {
-                    klStatus.innerText = "DRIFT DETECTED";
-                    klStatus.className = "status-badge warning";
-                    klProgress.className = "progress-bar danger";
-                } else {
-                    klStatus.innerText = "Normal";
-                    klStatus.className = "status-badge success";
-                    klProgress.className = "progress-bar success";
-                }
+                <div class="hero-kpi-secondary">
+                  <div class="metric-label">Rolling RMSE vs Baseline</div>
+                  <div class="hero-kpi-value-row">
+                    <span class="hero-kpi-value-sm" id="card-rmse">--</span>
+                  </div>
+                  <div class="metric-sub" id="card-rmse-sub">limit: 0.0300</div>
+                </div>
+              </div>
+            </div>
+          </div>
 
-                // Update RMSE
-                const rmseVal = data.rolling_rmse;
-                document.getElementById("rmse-value").innerText = rmseVal.toFixed(4);
-                const threshold = data.baseline_rmse * data.rmse_threshold_factor;
-                document.getElementById("rmse-threshold-text").innerText = `retraining limit: ${threshold.toFixed(4)}`;
-                
-                const rmseProgress = document.getElementById("rmse-progress");
-                const rmsePct = Math.min(100, (rmseVal / threshold) * 100);
-                rmseProgress.style.width = `${rmsePct}%`;
-                
-                const rmseStatus = document.getElementById("rmse-status");
-                if (rmseVal > threshold) {
-                    rmseStatus.innerText = "ERROR DRIFT";
-                    rmseStatus.className = "status-badge warning";
-                    rmseProgress.className = "progress-bar danger";
-                } else {
-                    rmseStatus.innerText = "Optimal";
-                    rmseStatus.className = "status-badge success";
-                    rmseProgress.className = "progress-bar success";
-                }
-            } catch (err) {
-                console.error("Failed to fetch drift monitoring data:", err);
-            }
-        }
+          <!-- Right Narrow: System Info Panel -->
+          <div class="panel system-info-panel">
+            <div class="panel-header">
+              <div class="panel-title">System Status</div>
+            </div>
+            <div class="panel-body info-list-body">
+              <div class="info-item">
+                <span class="info-label">Active Model</span>
+                <span class="info-val" id="card-model">--</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">Engine Latency</span>
+                <span class="info-val" id="card-latency">--</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">Service API</span>
+                <span class="info-val" id="card-model-sub">loading...</span>
+              </div>
+            </div>
+          </div>
+        </div>
 
-        // Trigger retrain
-        document.getElementById("retrain-btn").onclick = async () => {
-            const btn = document.getElementById("retrain-btn");
-            const statusTxt = document.getElementById("retrain-status");
-            btn.disabled = true;
-            statusTxt.innerText = "retraining job submitted in background...";
-            
-            try {
-                const response = await fetch("/retrain", { method: "POST" });
-                const data = await response.json();
-                statusTxt.innerText = "retraining started successfully! Reloading weights in 5s.";
-                setTimeout(() => {
-                    fetchHealth();
-                    fetchDrift();
-                    statusTxt.innerText = "";
-                    btn.disabled = false;
-                }, 5000);
-            } catch (err) {
-                logger.error("Error submitting retraining job:", err);
-                statusTxt.innerText = "Failed to submit retraining job.";
-                btn.disabled = false;
-            }
-        };
+        <!-- Active Forecast Surface Panel (Visual Dominance) -->
+        <div class="panel dashboard-chart-panel">
+          <div class="panel-header">
+            <div class="panel-title">Active Volatility Surface</div>
+            <span class="panel-meta-text">Real-time 3D reconstruction</span>
+          </div>
+          <div class="panel-body">
+            <div class="chart-box dash-chart-box">
+              <div class="chart-placeholder" id="status-dash-surface">No forecast runs yet — click Forecast in the sidebar to run inference</div>
+              <div class="plot-div" id="plot-dash-surface"></div>
+            </div>
+          </div>
+        </div>
 
-        // Switch tabs
-        function switchTab(tabId) {
-            document.querySelectorAll(".tab-btn").forEach(btn => btn.classList.remove("active"));
-            document.querySelectorAll(".tab-body").forEach(body => body.classList.remove("active"));
-            
-            event.target.classList.add("active");
-            document.getElementById(`tab-${tabId}`).classList.add("active");
-            
-            // Relayout Plotly charts to adapt to size changes
-            const chartDivs = ["plotly-surface_3d", "plotly-evolution_heatmap", "plotly-cross_sections"];
-            chartDivs.forEach(divId => {
-                const div = document.getElementById(divId);
-                if (div && div.data) {
-                    Plotly.Plots.resize(div);
-                }
-            });
-        }
+        <!-- Split: Drift Summary + Event Log (Asymmetric bottom row) -->
+        <div class="split-row">
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">Drift Summary</div>
+            </div>
+            <div class="drift-metrics-list">
+              <div class="drift-row">
+                <div class="drift-label-block">
+                  <div class="indicator-dot" id="dash-dot-kl"></div>
+                  <span>KL Divergence</span>
+                </div>
+                <div class="drift-track-wrapper">
+                  <div class="drift-bar-track"><div class="drift-bar-fill" id="dash-bar-kl"></div></div>
+                  <div class="drift-val" id="dash-val-kl">--</div>
+                  <div class="drift-badge-text" id="dash-badge-kl">--</div>
+                </div>
+              </div>
+              <div class="drift-row">
+                <div class="drift-label-block">
+                  <div class="indicator-dot" id="dash-dot-rmse"></div>
+                  <span>RMSE vs Baseline</span>
+                </div>
+                <div class="drift-track-wrapper">
+                  <div class="drift-bar-track"><div class="drift-bar-fill" id="dash-bar-rmse"></div></div>
+                  <div class="drift-val" id="dash-val-rmse">--</div>
+                  <div class="drift-badge-text" id="dash-badge-rmse">--</div>
+                </div>
+              </div>
+            </div>
+          </div>
 
-        // Send prediction request
-        document.getElementById("predict-btn").onclick = async () => {
-            const loaders = document.querySelectorAll(".chart-loader");
-            loaders.forEach(l => l.style.display = "flex");
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">Recent Events</div>
+            </div>
+            <div class="log-stream" id="dashboard-log">
+              <div class="log-stream-empty">No events yet</div>
+            </div>
+          </div>
+        </div>
 
-            const spot = parseFloat(document.getElementById("spot_price").value);
-            const r = parseFloat(document.getElementById("risk_free_rate").value);
-            const q = parseFloat(document.getElementById("dividend_yield").value);
-            
-            let contracts;
-            try {
-                contracts = JSON.parse(document.getElementById("contracts_json").value);
-            } catch (err) {
-                alert("Invalid JSON format in option contracts box.");
-                loaders.forEach(l => l.style.display = "none");
-                return;
-            }
+      </div>
 
-            const payload = {
-                timestamp: new Date().toISOString(),
-                spot_price: spot,
-                risk_free_rate: r,
-                dividend_yield: q,
-                contracts: contracts
-            };
+      <!-- ============================================================
+           PAGE 2: FORECAST
+           ============================================================ -->
+      <div id="page-forecast" class="page-content" style="display: none;">
 
-            try {
-                const response = await fetch("/predict?include_plots=true", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                
-                if (!response.ok) {
-                    const errData = await response.json();
-                    throw new Error(errData.detail || "Server error");
-                }
+        <!-- Input Form -->
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Run Inference</div>
+            <button class="primary" id="predict-btn">Run Inference</button>
+          </div>
+          <div class="forecast-form">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Spot Price ($)</label>
+                <input type="number" id="spot_price" value="745.64" step="0.01">
+              </div>
+              <div class="form-group">
+                <label>Risk-Free Rate</label>
+                <input type="number" id="risk_free_rate" value="0.035" step="0.001">
+              </div>
+              <div class="form-group">
+                <label>Dividend Yield</label>
+                <input type="number" id="dividend_yield" value="0.010" step="0.001">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Options Chain (JSON)</label>
+              <textarea id="contracts_json" rows="12" spellcheck="false"></textarea>
+            </div>
+          </div>
+          <div class="panel-footer">
+            <span>7x7 surface grid · arbitrage filter applied</span>
+            <button class="sm" id="load-sample-btn">Load Sample Data</button>
+          </div>
+        </div>
 
-                const data = await response.json();
-                loaders.forEach(l => l.style.display = "none");
+        <!-- Results (charts) -->
+        <div class="panel results-panel" id="forecast-tabs">
+          <div class="chart-glow"></div>
+          <div class="tab-bar">
+            <button class="active" data-tab="tab-3d">3D Surface</button>
+            <button data-tab="tab-heat">Heatmap</button>
+            <button data-tab="tab-cross">Cross-Sections</button>
+          </div>
+          <div class="tab-content">
+            <div class="tab-page active" id="tab-3d">
+              <div class="chart-box">
+                <div class="chart-placeholder" id="status-3d">Awaiting inference...</div>
+                <div class="plot-div" id="plot-3d"></div>
+              </div>
+            </div>
+            <div class="tab-page" id="tab-heat">
+              <div class="chart-box">
+                <div class="chart-placeholder" id="status-heat">Awaiting inference...</div>
+                <div class="plot-div" id="plot-heat"></div>
+              </div>
+            </div>
+            <div class="tab-page" id="tab-cross">
+              <div class="chart-box">
+                <div class="chart-placeholder" id="status-cross">Awaiting inference...</div>
+                <div class="plot-div" id="plot-cross"></div>
+              </div>
+            </div>
+          </div>
+        </div>
 
-                // Render plots
-                if (data.plots) {
-                    const plot3d = JSON.parse(data.plots.surface_3d);
-                    // Override layout size to fit container
-                    plot3d.layout.width = undefined;
-                    plot3d.layout.height = undefined;
-                    Plotly.newPlot("plotly-surface_3d", plot3d.data, plot3d.layout, {responsive: true});
+      </div>
 
-                    const plotHeatmap = JSON.parse(data.plots.evolution_heatmap);
-                    plotHeatmap.layout.width = undefined;
-                    plotHeatmap.layout.height = undefined;
-                    Plotly.newPlot("plotly-evolution_heatmap", plotHeatmap.data, plotHeatmap.layout, {responsive: true});
+      <!-- ============================================================
+           PAGE 3: DRIFT MONITOR
+           ============================================================ -->
+      <div id="page-drift" class="page-content" style="display: none;">
 
-                    const plotCross = JSON.parse(data.plots.cross_sections);
-                    plotCross.layout.width = undefined;
-                    plotCross.layout.height = undefined;
-                    Plotly.newPlot("plotly-cross_sections", plotCross.data, plotCross.layout, {responsive: true});
-                }
+        <!-- Drift Analysis -->
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Drift Analysis</div>
+            <button id="refresh-drift-btn">Refresh</button>
+          </div>
+          <div class="drift-metrics-list">
+            <div class="drift-row">
+              <div class="drift-label-block">
+                <div class="indicator-dot" id="drift-dot-kl"></div>
+                <span>KL Divergence</span>
+              </div>
+              <div class="drift-track-wrapper">
+                <div class="drift-bar-track"><div class="drift-bar-fill" id="drift-bar-kl"></div></div>
+                <div class="drift-val" id="drift-val-kl">--</div>
+                <div class="drift-badge-text" id="drift-badge-kl">--</div>
+              </div>
+            </div>
+            <div class="drift-row">
+              <div class="drift-label-block">
+                <div class="indicator-dot" id="drift-dot-rmse"></div>
+                <span>RMSE vs Baseline</span>
+              </div>
+              <div class="drift-track-wrapper">
+                <div class="drift-bar-track"><div class="drift-bar-fill" id="drift-bar-rmse"></div></div>
+                <div class="drift-val" id="drift-val-rmse">--</div>
+                <div class="drift-badge-text" id="drift-badge-rmse">--</div>
+              </div>
+            </div>
+          </div>
+        </div>
 
-                // Update monitoring cards
-                fetchDrift();
+        <!-- Thresholds -->
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Thresholds</div>
+          </div>
+          <div class="panel-body" style="padding: 0;">
+            <table class="threshold-table">
+              <tr><td>KL Threshold</td><td id="thr-kl">0.50</td></tr>
+              <tr><td>Baseline RMSE</td><td id="thr-base-rmse">0.0200</td></tr>
+              <tr><td>RMSE Factor</td><td id="thr-rmse-factor">1.5x</td></tr>
+              <tr><td>Retrain Recommended</td><td id="thr-retrain" style="color: var(--success);">No</td></tr>
+            </table>
+          </div>
+        </div>
 
-            } catch (err) {
-                alert(`Error making forecast: ${err.message}`);
-                loaders.forEach(l => l.style.display = "none");
-            }
-        };
+        <!-- Rolling History -->
+        <div class="split-row">
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">Recent KL Values</div>
+            </div>
+            <div class="history-list" id="kl-history">
+              <div class="log-stream-empty">No data yet — run an inference first</div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">Recent RMSE Values</div>
+            </div>
+            <div class="history-list" id="rmse-history">
+              <div class="log-stream-empty">No data yet — run an inference first</div>
+            </div>
+          </div>
+        </div>
 
-        // Initialize
-        fetchHealth();
-        fetchDrift();
-    </script>
+      </div>
+
+      <!-- ============================================================
+           PAGE 4: RE-CALIBRATE
+           ============================================================ -->
+      <div id="page-recalibrate" class="page-content" style="display: none;">
+
+        <!-- Pipeline -->
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Re-calibration Pipeline</div>
+            <button class="primary" id="trigger-recal-btn">Start Re-calibration</button>
+          </div>
+
+          <div class="timeline">
+            <div class="timeline-item" id="step-collect">
+              <div class="timeline-marker"></div>
+              <div class="timeline-content">
+                <div class="timeline-title">Collect Snapshots</div>
+                <div class="timeline-desc">Gathering option chain surface snapshots from ML database</div>
+                <div class="timeline-status" id="collect-status">Awaiting trigger</div>
+              </div>
+            </div>
+            <div class="timeline-item" id="step-preprocess">
+              <div class="timeline-marker"></div>
+              <div class="timeline-content">
+                <div class="timeline-title">Arbitrage Preprocessing</div>
+                <div class="timeline-desc">Applying arbitrage filtering & interpolating to 7x7 grid</div>
+                <div class="timeline-status" id="preprocess-status">Awaiting trigger</div>
+              </div>
+            </div>
+            <div class="timeline-item" id="step-train">
+              <div class="timeline-marker"></div>
+              <div class="timeline-content">
+                <div class="timeline-title">Model Training</div>
+                <div class="timeline-desc">Fitting HAR-RV + LSTM hybrid models on fresh historical windows</div>
+                <div class="timeline-status" id="train-status">Awaiting trigger</div>
+              </div>
+            </div>
+            <div class="timeline-item" id="step-swap">
+              <div class="timeline-marker"></div>
+              <div class="timeline-content">
+                <div class="timeline-title">Deploy Checkpoint</div>
+                <div class="timeline-desc">Validating surface limits and hot-swapping network parameters</div>
+                <div class="timeline-status" id="swap-status">Awaiting trigger</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="progress-container">
+            <div class="progress-meta">
+              <span id="progress-label">Idle</span>
+              <span id="progress-pct">--</span>
+            </div>
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill" id="progress-fill"></div>
+            </div>
+          </div>
+
+          <div class="pipeline-meta">
+            <span id="recal-epoch">--</span>
+            <span id="recal-eta">--</span>
+          </div>
+        </div>
+
+        <!-- Calibration Log -->
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Calibration Log</div>
+          </div>
+          <div class="log-stream" id="recal-log">
+            <div class="log-stream-empty">No events yet</div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Scripts: api → charts → app (dependency order) -->
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script src="/static/js/app.js"></script>
 </body>
 </html>

@@ -23,7 +23,7 @@ class TestServingAPI(unittest.TestCase):
         """Test GET / returns the dashboard HTML."""
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Neural Volatility Surface Forecaster", response.text)
+        self.assertIn("VolForecaster", response.text)
 
     def test_health_endpoint(self):
         """Test GET /health returns standard healthy status."""

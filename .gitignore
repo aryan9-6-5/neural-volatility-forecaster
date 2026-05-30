@@ -43,3 +43,6 @@ tests/*.html
 tests/*.png
 documentation/plots/
 
+# Local testing scripts
+*.ps1
+

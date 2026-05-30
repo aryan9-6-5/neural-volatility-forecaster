@@ -6,6 +6,7 @@ import torch
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uvicorn
@@ -27,6 +28,9 @@ app = FastAPI(
     description="Low-latency REST endpoints for serving multi-step implied volatility surface forecasts.",
     version="1.0.0"
 )
+
+# Mount Gzip middleware for speed/compression
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="inference/static"), name="static")

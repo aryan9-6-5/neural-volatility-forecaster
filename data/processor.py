@@ -145,8 +145,8 @@ def apply_arbitrage_filters(df: pd.DataFrame, volume_filter: bool = True) -> pd.
     filtered["total_variance"] = filtered["impliedVolatility"] ** 2 * filtered["tau"]
     
     calendar_valid = []
-    # Check calendar spread separately for calls and puts to preserve structure
-    for (opt_type, kappa_val), group in filtered.groupby(["option_type", "kappa_bin"]):
+    # Check calendar spread separately for calls and puts to preserve structure, grouping by strike
+    for (opt_type, strike_val), group in filtered.groupby(["option_type", "strike"]):
         group = group.sort_values("tau")
         tv_values = group["total_variance"].values
         tau_values = group["tau"].values
@@ -155,10 +155,12 @@ def apply_arbitrage_filters(df: pd.DataFrame, volume_filter: bool = True) -> pd.
         last_valid_tv = tv_values[0]
         
         for idx in range(1, len(tv_values)):
-            # Total variance must be non-decreasing in expiry
-            if tv_values[idx] >= last_valid_tv:
+            # Total variance must be non-decreasing in expiry.
+            # If tau is the same (e.g. multiple options at same expiry), they don't form a calendar spread.
+            if np.isclose(tau_values[idx], tau_values[idx-1]) or tv_values[idx] >= last_valid_tv:
                 valid_mask.append(True)
-                last_valid_tv = tv_values[idx]
+                if not np.isclose(tau_values[idx], tau_values[idx-1]):
+                    last_valid_tv = tv_values[idx]
             else:
                 valid_mask.append(False)
         calendar_valid.append(group[valid_mask])
@@ -182,7 +184,10 @@ def process_raw_snapshot(df: pd.DataFrame, volume_filter: bool = True) -> pd.Dat
     def calculate_tau(row):
         try:
             exp_date = datetime.strptime(row["expiry"], "%Y-%m-%d").date()
-            snap_date = datetime.fromisoformat(row["timestamp"]).date()
+            ts = row["timestamp"]
+            if isinstance(ts, str) and ts.endswith("Z"):
+                ts = ts[:-1] + "+00:00"
+            snap_date = datetime.fromisoformat(ts).date()
             days = (exp_date - snap_date).days
             # Fallback to at least 1 day to avoid tau=0 division
             days = max(1, days)
@@ -238,8 +243,8 @@ def interpolate_to_grid(kappas: np.ndarray, taus: np.ndarray, ivs: np.ndarray) -
     Interpolate scattered options coordinates (kappa, tau) onto the standard 7x7 grid.
     Utilizes Scipy's RBFInterpolator with a thin-plate spline kernel.
     """
-    if len(ivs) < 5:
-        raise ValueError(f"Insufficient options data points ({len(ivs)}) to perform RBF interpolation. Need at least 5.")
+    if len(ivs) < 3:
+        raise ValueError(f"Insufficient options data points ({len(ivs)}) to perform RBF interpolation. Need at least 3.")
         
     points = np.column_stack([kappas, taus])
     
