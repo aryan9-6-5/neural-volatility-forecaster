@@ -14,10 +14,13 @@ import logging
 
 # Import project utilities
 from data.processor import process_raw_snapshot, interpolate_to_grid, GRID_KAPPAS, GRID_TAUS
-from data.dataset import generate_synthetic_dataset
+from data.dataset import generate_synthetic_dataset, build_surface_dataset
+from data.rolling_buffer import SurfaceHistoryBuffer
 from utils.plotting import plot_3d_surface, plot_residuals_heatmap, plot_cross_sections, fig_to_json
 from inference.monitor import DriftMonitor
+from inference.prediction_store import PredictionStore
 from models.architectures import HARRVLSTMHybrid
+from models.serialization import load_checkpoint
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -45,6 +48,8 @@ config = {}
 model = None
 drift_monitor = None
 baseline_avg_surface = None
+history_buffer = None
+prediction_store = None
 
 # Pydantic Schemas for validation
 class OptionContract(BaseModel):
@@ -88,8 +93,8 @@ class MockVolatilityModel:
 
 @app.on_event("startup")
 def startup_event():
-    global config, model, drift_monitor, baseline_avg_surface
-    
+    global config, model, drift_monitor, baseline_avg_surface, history_buffer, prediction_store
+
     # 1. Load config
     config_path = "configs/base_config.yaml"
     if os.path.exists(config_path):
@@ -102,7 +107,9 @@ def startup_event():
             "serving": {"model_name": "volatility_surface_forecaster"},
             "monitoring": {"rolling_window_days": 10, "kl_threshold": 0.5, "rmse_threshold_factor": 1.5}
         }
-        
+
+    seed = config.get("training", {}).get("seed", 42)
+
     # 2. Instantiate drift monitor
     m_cfg = config.get("monitoring", {})
     drift_monitor = DriftMonitor(
@@ -110,45 +117,43 @@ def startup_event():
         kl_threshold=m_cfg.get("kl_threshold", 0.5),
         rmse_threshold_factor=m_cfg.get("rmse_threshold_factor", 1.5)
     )
-    
-    # 3. Create synthetic baseline surface for monitoring reference
-    synthetic_data, _ = generate_synthetic_dataset(num_days=30)
-    baseline_avg_surface = np.mean(synthetic_data, axis=0) # shape (7, 7)
-    
-    # 4. Load Active Model (from MLflow or local files)
+
+    # 3. Real rolling history buffer (drives /predict) and matured-forecast store (drives drift RMSE)
+    lookback = config.get("data", {}).get("lookback", 20)
+    s_cfg = config.get("serving", {})
+    history_buffer = SurfaceHistoryBuffer(
+        path=s_cfg.get("history_buffer_path", "data/state/rolling_buffer.npz"),
+        lookback=lookback
+    )
+    prediction_store = PredictionStore(path=s_cfg.get("prediction_store_path", "data/state/pending_predictions.npz"))
+
+    # 4. Baseline surface for data-drift KL comparisons: use the real historical mean
+    # surface when we have real collected data, otherwise a seeded (reproducible) synthetic one.
+    raw_dir = config.get("data", {}).get("raw_dir", "data/raw")
+    real_dataset = np.empty((0, 7, 7))
+    if os.path.isdir(raw_dir) and len(os.listdir(raw_dir)) > 0:
+        real_dataset, _ = build_surface_dataset(raw_dir)
+    if len(real_dataset) > 0:
+        baseline_avg_surface = np.mean(real_dataset, axis=0)
+        logger.info(f"Using real historical mean surface ({len(real_dataset)} snapshots) as drift baseline.")
+    else:
+        synthetic_data, _ = generate_synthetic_dataset(num_days=30, seed=seed)
+        baseline_avg_surface = np.mean(synthetic_data, axis=0)
+        logger.info("No real historical data available; using seeded synthetic mean surface as drift baseline.")
+
+    # 5. Load Active Model from the local checkpoint (state_dict + JSON sidecar).
+    # MLflow (see training/train.py) is used for experiment tracking only — production
+    # serving always loads from the local checkpoint, never a registry round-trip.
     model_loaded = False
-    
-    # Try local PyTorch checkpoint first
     checkpoint_path = "models/checkpoint.pt"
     if os.path.exists(checkpoint_path):
         try:
-            model = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=False)
-            model.eval()
+            model = load_checkpoint(checkpoint_path, map_location=torch.device("cpu"))
             logger.info(f"Loaded active production model from local checkpoint: {checkpoint_path}")
             model_loaded = True
         except Exception as e:
             logger.error(f"Error loading model from {checkpoint_path}: {e}")
-            
-    # Try MLflow Registry if not loaded
-    if not model_loaded:
-        try:
-            import mlflow
-            # Ensure MLflow tracking URI is set (defaulting to local mlruns)
-            tracking_uri = config.get("serving", {}).get("model_registry_uri", "mlruns")
-            mlflow.set_tracking_uri(tracking_uri)
-            
-            model_name = config.get("serving", {}).get("model_name", "volatility_surface_forecaster")
-            # Load active model with 'Production' alias or tag if possible
-            model_uri = f"models:/{model_name}/Production"
-            
-            # Since MLflow server might not be running locally, we try/except
-            # model = mlflow.pytorch.load_model(model_uri)
-            # model.eval()
-            # model_loaded = True
-            logger.info("Attempted loading from MLflow. Mocking registry load since server is idle.")
-        except Exception as e:
-            logger.warning(f"Could not connect to MLflow server: {e}")
-            
+
     if not model_loaded:
         logger.warning("No production model checkpoint found. Initializing Mock Forecasting Model.")
         model = MockVolatilityModel(forecast_horizons=config.get("data", {}).get("forecast_horizons", [1, 5, 10]))
@@ -177,8 +182,8 @@ def predict_surface(payload: SnapshotPayload, include_plots: bool = Query(True, 
     Accept raw option snapshot, execute engineering filters, interpolate,
     gather historical lookback sequence, and serve future forecasting grids.
     """
-    global model, drift_monitor, baseline_avg_surface
-    
+    global model, drift_monitor, baseline_avg_surface, history_buffer, prediction_store
+
     if not model:
         raise HTTPException(status_code=503, detail="Forecasting model is not initialized yet.")
         
@@ -216,22 +221,30 @@ def predict_surface(payload: SnapshotPayload, include_plots: bool = Query(True, 
             processed_df["impliedVolatility"].values
         ) # Shape (7, 7)
         
-        # 3. Build input lookback sequence (Requires L=20/60 steps)
+        # 3. Append the real processed grid to the rolling history buffer and fetch the
+        # actual lookback window — no synthetic filler (see data/rolling_buffer.py).
         lookback = config.get("data", {}).get("lookback", 20)
-        
-        # In a real environment, we would load the last L-1 processed snapshots from data/raw/
-        # Here we simulate historical loading by getting a synthetic series and swapping the last element
-        # with our active current_grid
-        dummy_series, _ = generate_synthetic_dataset(num_days=lookback)
-        dummy_series[-1] = current_grid
-        
+        degraded_padding = config.get("serving", {}).get("degraded_mode_padding", False)
+
+        history_buffer.append(current_grid, payload.timestamp)
+        window, degraded = history_buffer.get_window(degraded_padding=degraded_padding)
+        if window is None:
+            have = history_buffer.count()
+            raise HTTPException(
+                status_code=425,
+                detail=(
+                    f"Insufficient real snapshot history: have {have}, need {lookback}. "
+                    f"Submit {lookback - have} more /predict snapshot(s) before forecasting is available."
+                )
+            )
+
         # Normalize if model has train_mean and train_std attributes
         model_has_norm = not isinstance(model, MockVolatilityModel) and hasattr(model, "train_mean") and hasattr(model, "train_std")
         if model_has_norm:
-            dummy_series_norm = (dummy_series - model.train_mean) / model.train_std
-            input_tensor = torch.from_numpy(dummy_series_norm).float().unsqueeze(0).unsqueeze(2)
+            window_norm = (window - model.train_mean) / model.train_std
+            input_tensor = torch.from_numpy(window_norm).float().unsqueeze(0).unsqueeze(2)
         else:
-            input_tensor = torch.from_numpy(dummy_series).float().unsqueeze(0).unsqueeze(2)
+            input_tensor = torch.from_numpy(window).float().unsqueeze(0).unsqueeze(2)
         
         # 4. Perform Inference
         # In real PyTorch model, we run forward pass
@@ -257,15 +270,26 @@ def predict_surface(payload: SnapshotPayload, include_plots: bool = Query(True, 
                     10: out_numpy[0, 9] if out_numpy.shape[1] >= 10 else out_numpy[0, -1]
                 }
                 
-        # 5. Log prediction events to check drift
-        # Since we don't have actual future labels at serving time, we compare current_grid
-        # against baseline_avg_surface to see if input distributions are shifting.
-        # We also pass a dummy forecast comparison to satisfy the logging signature.
-        drift_status = drift_monitor.log_prediction(
-            y_true=current_grid,
-            y_pred=current_grid, # Placeholder for real future labels
-            baseline_surface=baseline_avg_surface
-        )
+        # 5. Match this snapshot against any previously-made forecasts that targeted this
+        # date to compute real performance drift, log data drift for the current snapshot,
+        # then persist today's forecasts (keyed by target date) for future matching.
+        observed_date = payload.timestamp[:10]
+        matured = prediction_store.pop_matching(observed_date)
+        for entry in matured:
+            drift_monitor.log_performance(y_true=current_grid, y_pred=entry["grid"])
+
+        drift_monitor.log_data_drift(current_surface=current_grid, baseline_surface=baseline_avg_surface)
+        drift_status = drift_monitor.get_status()
+        drift_status["degraded_mode"] = degraded
+
+        snapshot_date = pd.Timestamp(observed_date)
+        for h, f_grid in forecasts.items():
+            # Approximate "h forecast steps" as "h business days ahead", matching the
+            # collector's Mon-Fri daily cadence (see data/collector.py::start_scheduler).
+            # A gap in daily collection will desynchronize step-count vs. calendar-day
+            # matching — acceptable for this lightweight, no-extra-infra store.
+            target_date = (snapshot_date + pd.tseries.offsets.BDay(int(h))).strftime("%Y-%m-%d")
+            prediction_store.save_prediction(target_date, int(h), np.asarray(f_grid))
         
         # 6. Generate Plotly Visualizations (Layer 6 integration)
         plots = {}
@@ -304,20 +328,10 @@ def get_drift_metrics():
     global drift_monitor
     if not drift_monitor:
         raise HTTPException(status_code=503, detail="Drift monitor is not initialized.")
-        
-    return {
-        "rolling_rmse": float(np.mean(drift_monitor.recent_rmses)) if drift_monitor.recent_rmses else 0.0,
-        "rolling_kl_divergence": float(np.mean(drift_monitor.recent_kls)) if drift_monitor.recent_kls else 0.0,
-        "recent_rmses": drift_monitor.recent_rmses,
-        "recent_kls": drift_monitor.recent_kls,
-        "baseline_rmse": drift_monitor.baseline_rmse,
-        "kl_threshold": drift_monitor.kl_threshold,
-        "rmse_threshold_factor": drift_monitor.rmse_threshold_factor,
-        "retrain_recommended": bool(
-            (np.mean(drift_monitor.recent_rmses) > drift_monitor.baseline_rmse * drift_monitor.rmse_threshold_factor)
-            if drift_monitor.recent_rmses else False
-        )
-    }
+
+    status = drift_monitor.get_status()
+    status["retrain_recommended"] = status["trigger_retrain"]
+    return status
 
 from fastapi import BackgroundTasks
 
@@ -344,8 +358,7 @@ def trigger_retraining(background_tasks: BackgroundTasks):
             checkpoint_path = "models/checkpoint.pt"
             if os.path.exists(checkpoint_path):
                 global model
-                model = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=False)
-                model.eval()
+                model = load_checkpoint(checkpoint_path, map_location=torch.device("cpu"))
                 logger.info("Successfully reloaded new production model checkpoint.")
         except Exception as e:
             logger.error(f"Error during background model retraining: {e}")

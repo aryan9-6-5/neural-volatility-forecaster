@@ -1,5 +1,6 @@
 import sys
 import os
+import random
 import yaml
 import numpy as np
 import torch
@@ -12,6 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from data.dataset import generate_synthetic_dataset, create_sequences, build_surface_dataset
 from data.processor import GRID_KAPPAS, GRID_TAUS
+from models.serialization import load_checkpoint
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -39,16 +41,20 @@ def export_plots(use_synthetic=True):
     forecast_horizons = config["data"]["forecast_horizons"]
     horizon = max(forecast_horizons)
 
+    seed = config.get("training", {}).get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
+
     # 2. Get data
     raw_dir = config["data"]["raw_dir"]
     if not os.path.exists(raw_dir) or len(os.listdir(raw_dir)) == 0 or use_synthetic:
         logger.info("Using synthetic dataset for plotting.")
-        dataset, _ = generate_synthetic_dataset(num_days=3000)
+        dataset, _ = generate_synthetic_dataset(num_days=3000, seed=seed)
     else:
         logger.info(f"Loading raw options data from {raw_dir}...")
         dataset, _ = build_surface_dataset(raw_dir, volume_filter=True)
         if len(dataset) < (lookback + horizon):
-            dataset, _ = generate_synthetic_dataset(num_days=3000)
+            dataset, _ = generate_synthetic_dataset(num_days=3000, seed=seed)
 
     # Split and sequences
     T = len(dataset)
@@ -64,8 +70,7 @@ def export_plots(use_synthetic=True):
     if os.path.exists(checkpoint_path):
         try:
             logger.info(f"Loading trained PyTorch model from {checkpoint_path}...")
-            model = torch.load(checkpoint_path, map_location=device, weights_only=False)
-            model.eval()
+            model = load_checkpoint(checkpoint_path, map_location=device)
             with torch.no_grad():
                 if hasattr(model, "train_mean") and hasattr(model, "train_std"):
                     logger.info(f"Applying normalization using checkpoint parameters: mean={model.train_mean:.6f}, std={model.train_std:.6f}")

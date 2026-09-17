@@ -56,25 +56,23 @@ Implied Volatility Surface, Deep Learning, ConvLSTM, Financial Regularization, S
 
 The implied volatility surface (IVS) is a fundamental representation of options market expectations, capturing the market-embedded forecast of future asset wiggles across a continuous spectrum of strike prices and expiration dates. Formally, the surface represents the inversion of the Black-Scholes-Merton (BSM) formula mapped over a bivariate coordinate space of log-moneyness ($\kappa$) and annual time-to-expiry ($\tau$). Because these dimensions represent distinct contract features, predicting the temporal evolution of this 3D surface is a core challenge in computational finance, directly impacting the pricing of exotic derivatives, dynamic portfolio hedging, and macroeconomic risk assessment.
 
-In quantitative literature, implied volatility surface studies generally fall into two categories: *nowcasting* (or calibration) and *forecasting*. Nowcasting frameworks, such as deep smoothing neural networks or parametric model calibrations (e.g., Gatheral's SVI), aim to fit a smooth, arbitrage-free surface to noisy market quotes observed at a single, static point in time. These methods are highly regularized but lacks temporal predictive power. Conversely, forecasting frameworks seek to model the transition equations of the surface over time. 
+In quantitative literature, implied volatility surface studies generally fall into two categories: \emph{nowcasting} (or calibration) and \emph{forecasting}. Nowcasting frameworks, such as deep smoothing neural networks or parametric model calibrations (e.g., Gatheral's SVI), aim to fit a smooth, arbitrage-free surface to noisy market quotes observed at a single, static point in time. These methods are highly regularized but lacks temporal predictive power. Conversely, forecasting frameworks seek to model the transition equations of the surface over time. 
 
 Recent advancements in deep learning have introduced sequence models like Stacked LSTMs, Transformers, and spatiotemporal networks like Convolutional LSTMs (ConvLSTMs) to model this time-series behavior. However, traditional deep learning forecasters are trained solely to minimize Mean Squared Error (MSE) reconstruction losses. While MSE optimization yields low overall error metrics, it operates blindly to the underlying financial geometry. The resulting predicted surfaces frequently exhibit unphysical ripples, butterfly arbitrage violations, or extreme term-structure kinks. 
 
 To combat this irregularity, existing forecasting papers (most notably Medvedev \& Wang, 2022) apply post-prediction smoothing filters (such as Savitzky-Golay filtering) as a post-hoc processing step. Because this post-processing operates outside the PyTorch computational graph, it cannot backpropagate gradient signals to regularize model weights during training. The model is never taught *why* smooth surfaces are financially consistent; it is simply forced to fit raw, noisy labels, after which the predictions are artificially flattened.
 
-In this paper, we resolve this research gap by integrating **differentiable smoothness regularization directly into the neural network's loss objective**. Our custom composite loss function penalizes spatial second-order derivatives along the moneyness and maturity grids during backpropagation, enforcing spatial regularity and financial shape consistency natively during weight optimization. 
+In this paper, we resolve this research gap by integrating \textbf{differentiable smoothness regularization directly into the neural network's loss objective}. Our custom composite loss function penalizes spatial second-order derivatives along the moneyness and maturity grids during backpropagation, enforcing spatial regularity and financial shape consistency natively during weight optimization. 
 
 Our contributions are four-fold:
 \begin{enumerate}
     \item We develop a production-grade options engineering pipeline that downloads, filters, and standardizes options chains into uniform $7 \times 7$ tensor grids using Scattered Radial Basis Function (RBF) thin-plate splines.
     \item We implement a comprehensive suite of econometric and deep learning baselines, including Random Walk, Historical Mean, GARCH(1,1), HAR-RV, Stacked LSTMs, Transformers, and spatiotemporal ConvLSTMs.
-    \item We formulate a differentiable `SmoothnessRegularizedLoss` function that penalizes strike and expiry curvature alongside calendar-spread arbitrage violations.
+    \item We formulate a differentiable \texttt{SmoothnessRegularizedLoss} function that penalizes strike and expiry curvature alongside calendar-spread arbitrage violations.
     \item We present a region-specific evaluation of the models, decomposing errors across ATM, OTM Put, OTM Call, short-term, and long-term surface regions, demonstrating the superior performance and physical consistency of our regularized deep learning architecture.
 \end{enumerate}
 
 The remainder of this paper is structured as follows: Section II details the mathematical problem formulation and our data engineering pipeline. Section III describes the PyTorch deep learning architectures. Section IV defines our custom smoothness-regularized loss objective. Section V presents experimental results, baseline benchmarking, and Wilcoxon signed-rank tests. Section VI describes our low-latency serving and MLOps drift-monitoring implementation, and Section VII concludes.
-
----
 
 \section{Problem Formulation and Data Engineering}
 
@@ -98,13 +96,13 @@ The optimal parameters $\theta^*$ are learned by minimizing our composite loss f
 
 Raw market data is notoriously noisy, especially in the options chain. To clean the incoming quotes, we apply a series of rigorous preprocessing filters in Layer 2:
 \begin{enumerate}
-    \item **Liquidity Filter**: Discard any options with bid price $\le 0$, ask price $\le 0$, ask price $<$ bid price, or trading volume $= 0$.
-    \item **Spread Filter**: Remove highly illiquid contracts where the relative bid-ask spread is excessively wide:
+    \item \textbf{Liquidity Filter}: Discard any options with bid price $\le 0$, ask price $\le 0$, ask price $<$ bid price, or trading volume $= 0$.
+    \item \textbf{Spread Filter}: Remove highly illiquid contracts where the relative bid-ask spread is excessively wide:
     \begin{equation}
     \frac{C_{ask} - C_{bid}}{C_{mid}} \ge 0.50
     \end{equation}
-    \item **Boundary Filter**: Clip numerically inverted implied volatilities to a standard financial range: $\sigma^{IV} \in [0.01, 5.00]$.
-    \item **Arbitrage Filter**: Enforce static calendar spread constraints. For any two contracts with identical strikes but maturities $\tau_1 < \tau_2$, their total variance must satisfy the no-calendar-arbitrage condition:
+    \item \textbf{Boundary Filter}: Clip numerically inverted implied volatilities to a standard financial range: $\sigma^{IV} \in [0.01, 5.00]$.
+    \item \textbf{Arbitrage Filter}: Enforce static calendar spread constraints. For any two contracts with identical strikes but maturities $\tau_1 < \tau_2$, their total variance must satisfy the no-calendar-arbitrage condition:
     \begin{equation}
     \sigma^{IV}(\tau_1)^2 \cdot \tau_1 \le \sigma^{IV}(\tau_2)^2 \cdot \tau_2
     \end{equation}
@@ -125,8 +123,6 @@ We perform this coordinate mapping using Scattered Radial Basis Function (RBF) t
 \phi(r) = r^2 \ln(r)
 \end{equation}
 where $r = \sqrt{(\kappa - \kappa_i)^2 + (\tau - \tau_i)^2}$ represents the Euclidean distance in coordinate space. This mathematical formulation models the surface as an elastic sheet bent by point constraints, generating smooth, realistic reconstructions that naturally fill in coordinate gaps when trading volume is sparse. 
-
----
 
 \section{Model Architectures}
 
@@ -164,8 +160,6 @@ The residual error of the HAR baseline is modeled in parallel by an LSTM. The fi
 \mathbf{\hat{S}}_{t+h} = \mathbf{\hat{S}}^{HAR}_{t+h} + \mathbf{\hat{e}}^{LSTM}_{t+h}
 \end{equation}
 This hybrid approach leverages econometric stability while allowing deep learning layers to model complex, non-linear volatility smiles.
-
----
 
 \section{Smoothness-Regularized Loss Objective}
 
@@ -213,8 +207,6 @@ We formulate a differentiable penalty $\mathcal{L}_{calendar}$ that enforces the
 \end{equation}
 where $\hat{V}_{b,i,j} = \hat{S}_{b,i,j}^2 \cdot \tau_j$ represents the total predicted variance. Since the ReLU function is differentiable, it only propagates gradients when calendar arbitrage is violated, active-steering weights away from unphysical pricing regimes. We configure baseline parameters to $\lambda_{strike} = 10^{-4}$, $\lambda_{expiry} = 10^{-4}$, and $\lambda_{calendar} = 10^{-2}$.
 
----
-
 \section{Experimental Results and Performance}
 
 We train and benchmark our models on daily options data of the SPY index. We utilize a chronological split of 60\% training, 20\% validation, and 20\% test data, preserving the temporal sequence.
@@ -245,9 +237,9 @@ ConvLSTM (Unreg. MSE) & 0.0142 & 0.0098 & 4.80\% & 3.25\% \\
 \end{center}
 \end{table}
 
-Table~\ref{tab:metrics} outlines the overall performance metrics for the $h=5$ days ahead forecast horizon. Our **Smoothness-Regularized ConvLSTM** achieves the lowest overall Root Mean Squared Error (RMSE = 0.0121) and Mean Absolute Percentage Error (MAPE = 4.12\%). 
+Table~\ref{tab:metrics} outlines the overall performance metrics for the $h=5$ days ahead forecast horizon. Our \textbf{Smoothness-Regularized ConvLSTM} achieves the lowest overall Root Mean Squared Error (RMSE = 0.0121) and Mean Absolute Percentage Error (MAPE = 4.12\%). 
 
-Crucially, the GARCH and unregularized Deep Learning architectures (LSTM, Transformer, and unregularized ConvLSTM) yield high calendar arbitrage violations (ranging from 3.25\% to 5.40\%) on the test set. By training our model with the differentiable spread penalty, our regularized ConvLSTM achieves exactly **0.00\% arbitrage violations**, demonstrating that regularizing the loss function resolves financial violations without sacrificing reconstruction accuracy.
+Crucially, the GARCH and unregularized Deep Learning architectures (LSTM, Transformer, and unregularized ConvLSTM) yield high calendar arbitrage violations (ranging from 3.25\% to 5.40\%) on the test set. By training our model with the differentiable spread penalty, our regularized ConvLSTM achieves exactly \textbf{0.00\% arbitrage violations}, demonstrating that regularizing the loss function resolves financial violations without sacrificing reconstruction accuracy.
 
 \subsection{Region-Specific Error Decomposition}
 
@@ -271,11 +263,11 @@ ConvLSTM (MSE) & 0.0112 & 0.0162 & 0.0135 & 0.0182 & 0.0088 \\
 
 To understand where the deep sequence layers excel, we decompose the forecasting RMSE into five distinct regions of the volatility surface:
 \begin{itemize}
-    \item **ATM**: At-the-Money contracts ($\kappa = 0.00$)
-    \item **OTM Put**: Out-of-the-Money puts (Left Wing, $\kappa = -0.30, -0.20$)
-    \item **OTM Call**: Out-of-the-Money calls (Right Wing, $\kappa = +0.20, +0.30$)
-    \item **Short**: Short-term maturities ($\tau \le 1/12$y)
-    \item **Long**: Long-term maturities ($\tau \ge 0.50$y)
+    \item \textbf{ATM}: At-the-Money contracts ($\kappa = 0.00$)
+    \item \textbf{OTM Put}: Out-of-the-Money puts (Left Wing, $\kappa = -0.30, -0.20$)
+    \item \textbf{OTM Call}: Out-of-the-Money calls (Right Wing, $\kappa = +0.20, +0.30$)
+    \item \textbf{Short}: Short-term maturities ($\tau \le 1/12$y)
+    \item \textbf{Long}: Long-term maturities ($\tau \ge 0.50$y)
 \end{itemize}
 
 As shown in Table~\ref{tab:regions}, all models exhibit higher absolute errors in the short-term expiry and left-wing OTM Put regions. This is financially consistent with option market dynamics; short-term options are highly sensitive to near-term macro news (high gamma risk), and OTM puts carry tail-risk crash premiums that spike sporadically. Our regularized ConvLSTM outperforms all baselines across all regions, showing significant improvements in the volatile OTM Put wing (RMSE = 0.0138) and short maturities (RMSE = 0.0150).
@@ -283,8 +275,6 @@ As shown in Table~\ref{tab:regions}, all models exhibit higher absolute errors i
 \subsection{Statistical Significance: Wilcoxon Signed-Rank Test}
 
 To verify that the superior accuracy of our regularized model is not the result of chance, we perform a Wilcoxon signed-rank test on the absolute forecast errors. We test the null hypothesis that there is no median difference in prediction errors between the unregularized ConvLSTM and our smoothness-regularized ConvLSTM. The test yields a $p$-value of $2.4 \times 10^{-6}$, rejecting the null hypothesis at the 1\% significance level. This confirms that adding spatial smoothness derivatives to the PyTorch computational graph during training yields statistically significant improvements in forecasting accuracy.
-
----
 
 \section{System Implementation and MLOps Infrastructure}
 
@@ -294,13 +284,12 @@ To verify that the superior accuracy of our regularized model is not the result 
 \label{fig:heatmap}
 \end{figure}
 
-The entire quantitative platform is containerized using Docker and served via a low-latency **FastAPI serving application** in a production-grade infrastructure:
+The entire quantitative platform is containerized using Docker and served via a low-latency \textbf{FastAPI serving application} in a production-grade infrastructure:
 
-1.  **FastAPI Serving Engine**: The REST API exposes a `/predict` endpoint that receives raw daily options chain quotes in JSON format. The preprocessor filters, interpolates to a $7 \times 7$ grid, and runs a GPU-accelerated forward pass through the trained regularized ConvLSTM model.
-2.  **Network Optimization via Gzip Middleware**: Implied volatility grid calculations and Plotly graph JSON outputs represent large payloads. We mount GZip compression middleware on FastAPI. This compresses API response payloads larger than 1KB, reducing payload transmission sizes by up to 90\% and dropping local server-to-client transfer latencies to nominal levels ($<15$ milliseconds).
-3.  **MLOps Drift Monitor (`monitor.py`)**: To prevent model degradation under market regime shifts, we deploy a real-time drift monitor. The system computes the Kullback-Leibler (KL) Divergence between the spatial densities of incoming option grids and our baseline validation set. If the 10-day rolling RMSE spikes beyond a 1.5x threshold factor or if KL divergence exceeds `0.50` (signifying extreme macro drift), the system alerts administrators and activates a `/retrain` pipeline background thread to hot-swap model parameters automatically.
+1.  \textbf{FastAPI Serving Engine}: The REST API exposes a \texttt{/predict} endpoint that receives raw daily options chain quotes in JSON format. The preprocessor filters, interpolates to a $7 \times 7$ grid, and runs a GPU-accelerated forward pass through the trained regularized ConvLSTM model.
+2.  \textbf{Network Optimization via Gzip Middleware}: Implied volatility grid calculations and Plotly graph JSON outputs represent large payloads. We mount GZip compression middleware on FastAPI. This compresses API response payloads larger than 1KB, reducing payload transmission sizes by up to 90\% and dropping local server-to-client transfer latencies to nominal levels ($<15$ milliseconds).
+3.  \textbf{MLOps Drift Monitor (\texttt{monitor.py})}: To prevent model degradation under market regime shifts, we deploy a real-time drift monitor. The system computes the Kullback-Leibler (KL) Divergence between the spatial densities of incoming option grids and our baseline validation set. If the 10-day rolling RMSE spikes beyond a 1.5x threshold factor or if KL divergence exceeds 0.50 (signifying extreme macro drift), the system alerts administrators and activates a \texttt{/retrain} pipeline background thread to hot-swap model parameters automatically.
 
----
 
 \section{Conclusion}
 

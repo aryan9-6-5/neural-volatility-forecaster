@@ -6,6 +6,7 @@ evaluates live arbitrage violations, and serves forecasts via the champion Hybri
 import sys
 import os
 import glob
+import random
 import pandas as pd
 import numpy as np
 import torch
@@ -17,6 +18,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from data.processor import process_raw_snapshot, interpolate_to_grid, GRID_KAPPAS, GRID_TAUS
 from training.train import calculate_metrics, evaluate_regions, get_region_masks
 from data.dataset import generate_synthetic_dataset
+from models.serialization import load_checkpoint
 
 def main():
     print("=" * 80)
@@ -31,6 +33,10 @@ def main():
     raw_dir = config["data"]["raw_dir"]
     lookback = config["data"]["lookback"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    seed = config.get("training", {}).get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
 
     # 2. Scan for raw live Parquet snapshots
     files = sorted(glob.glob(os.path.join(raw_dir, "*.parquet")))
@@ -129,12 +135,11 @@ def main():
     try:
         # Load champion model
         print(f"Loading champion model from: {checkpoint_path}")
-        model = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        model.eval()
-        
+        model = load_checkpoint(checkpoint_path, map_location=device)
+
         # Simulate sequential serving context
         # Generate baseline sequence and insert live surface as the latest observation
-        lookback_series, _ = generate_synthetic_dataset(num_days=lookback)
+        lookback_series, _ = generate_synthetic_dataset(num_days=lookback, seed=seed)
         lookback_series[-1] = surfaces_np[-1]
         
         # Apply standardization using model attributes

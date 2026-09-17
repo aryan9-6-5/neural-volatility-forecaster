@@ -221,16 +221,23 @@ def create_sequences(data: np.ndarray, lookback: int, horizon: int) -> tuple:
         
     return X, y
 
-def generate_synthetic_dataset(num_days: int = 120) -> tuple:
+def generate_synthetic_dataset(num_days: int = 120, seed: int = None) -> tuple:
     """
     Generate a highly realistic synthetic volatility surface time-series.
     Incorporates Markov regime shifts (Calm vs. Crisis), Poisson jumps,
     leverage effects (skew-level coupling), and GARCH-like volatility clustering.
-    
+
     Formula for surface at time t:
         IV(kappa, tau) = Level_t - Skew_t * kappa + Curvature_t * kappa^2 + Term_t * ln(tau / 0.25)
+
+    Args:
+        num_days: number of daily surfaces to generate.
+        seed: RNG seed. Pass an explicit seed for reproducible output (e.g. for
+            training/evaluation runs); leave as None for non-deterministic
+            output (e.g. ad-hoc exploration).
     """
     logger.info(f"Generating realistic regime-switching synthetic volatility surface dataset for {num_days} days...")
+    rng = np.random.default_rng(seed)
     
     # Latent state variables
     level = 0.18
@@ -251,10 +258,10 @@ def generate_synthetic_dataset(num_days: int = 120) -> tuple:
     for day in range(num_days):
         # 1. Markov Regime Transition
         if regime == 0:
-            if np.random.rand() < 0.04:  # Calm -> Stress transition
+            if rng.random() < 0.04:  # Calm -> Stress transition
                 regime = 1
         else:
-            if np.random.rand() < 0.12:  # Stress -> Calm transition
+            if rng.random() < 0.12:  # Stress -> Calm transition
                 regime = 0
                 
         # 2. Setup regime-specific parameters
@@ -272,14 +279,14 @@ def generate_synthetic_dataset(num_days: int = 120) -> tuple:
         cond_vol = np.clip(np.sqrt(cond_vol), 0.005, 0.04)
 
         # 4. Level shock & Skew/Term structure coupling (leverage/spillover effects)
-        shock_l = np.random.normal(0, cond_vol)
-        shock_s = 0.4 * shock_l + np.random.normal(0, sigma_s)
-        shock_t = -0.2 * shock_l + np.random.normal(0, sigma_t)
-        
+        shock_l = rng.normal(0, cond_vol)
+        shock_s = 0.4 * shock_l + rng.normal(0, sigma_s)
+        shock_t = -0.2 * shock_l + rng.normal(0, sigma_t)
+
         # 5. Poisson Jumps
         jump = 0.0
-        if np.random.rand() < 0.03:  # 3% chance of macro shock jump
-            jump = np.random.exponential(0.15)
+        if rng.random() < 0.03:  # 3% chance of macro shock jump
+            jump = rng.exponential(0.15)
             skew += 0.08  # Volatility jump steepens skew immediately (puts bid up)
             
         # Decay previous jump effects (half-life of ~4 days)
@@ -305,7 +312,7 @@ def generate_synthetic_dataset(num_days: int = 120) -> tuple:
                 # Volatility smile (curvature depends on regime)
                 smile_curvature = 0.16 if regime == 1 else 0.10
                 iv = effective_level - skew * kappa + smile_curvature * kappa**2 + term * np.log(tau / 0.25)
-                iv += np.random.normal(0, 0.001)
+                iv += rng.normal(0, 0.001)
                 grid_iv[i, j] = iv
                 
         # Clip surface values

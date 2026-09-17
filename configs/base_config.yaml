@@ -59,6 +59,9 @@ serving:
   port: 8000
   model_registry_uri: "mlruns"
   model_name: "volatility_surface_forecaster"
+  history_buffer_path: "data/state/rolling_buffer.npz"
+  degraded_mode_padding: false
+  prediction_store_path: "data/state/pending_predictions.npz"
   
 monitoring:
   rolling_window_days: 10

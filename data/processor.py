@@ -1,9 +1,9 @@
 # pyrefly: ignore [missing-import]
 import numpy as np
 import pandas as pd
-from datetime import datetime
 from scipy.stats import norm
 from scipy.interpolate import RBFInterpolator
+from scipy.optimize import brentq
 import logging
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,113 @@ def implied_volatility_newton_raphson(
         # If Brent fails, return NaN
         return np.nan
 
+def black_scholes_price_vec(spot: np.ndarray, strike: np.ndarray, tau: np.ndarray, r: np.ndarray,
+                             q: np.ndarray, sigma: np.ndarray, is_call: np.ndarray) -> np.ndarray:
+    """Vectorized Black-Scholes price. Rows with tau<=0 or sigma<=0 price to 0.0 (matches the scalar version)."""
+    spot, strike, tau, r, q, sigma = (np.asarray(a, dtype=float) for a in (spot, strike, tau, r, q, sigma))
+    is_call = np.asarray(is_call, dtype=bool)
+
+    valid = (tau > 0) & (sigma > 0)
+    safe_tau = np.where(valid, tau, 1.0)
+    safe_sigma = np.where(valid, sigma, 1.0)
+    sqrt_tau = np.sqrt(safe_tau)
+
+    d1 = (np.log(spot / strike) + (r - q + 0.5 * safe_sigma ** 2) * safe_tau) / (safe_sigma * sqrt_tau)
+    d2 = d1 - safe_sigma * sqrt_tau
+
+    call_price = spot * np.exp(-q * safe_tau) * norm.cdf(d1) - strike * np.exp(-r * safe_tau) * norm.cdf(d2)
+    put_price = strike * np.exp(-r * safe_tau) * norm.cdf(-d2) - spot * np.exp(-q * safe_tau) * norm.cdf(-d1)
+    price = np.where(is_call, call_price, put_price)
+    return np.where(valid, price, 0.0)
+
+
+def black_scholes_vega_vec(spot: np.ndarray, strike: np.ndarray, tau: np.ndarray, r: np.ndarray,
+                            q: np.ndarray, sigma: np.ndarray) -> np.ndarray:
+    """Vectorized Black-Scholes vega. Rows with tau<=0 or sigma<=0 vega to 0.0 (matches the scalar version)."""
+    spot, strike, tau, r, q, sigma = (np.asarray(a, dtype=float) for a in (spot, strike, tau, r, q, sigma))
+
+    valid = (tau > 0) & (sigma > 0)
+    safe_tau = np.where(valid, tau, 1.0)
+    safe_sigma = np.where(valid, sigma, 1.0)
+    sqrt_tau = np.sqrt(safe_tau)
+
+    d1 = (np.log(spot / strike) + (r - q + 0.5 * safe_sigma ** 2) * safe_tau) / (safe_sigma * sqrt_tau)
+    vega = spot * np.exp(-q * safe_tau) * sqrt_tau * norm.pdf(d1)
+    return np.where(valid, vega, 0.0)
+
+
+def implied_volatility_newton_raphson_vec(
+    market_price: np.ndarray,
+    spot: np.ndarray,
+    strike: np.ndarray,
+    tau: np.ndarray,
+    r: np.ndarray,
+    q: np.ndarray,
+    is_call: np.ndarray,
+    initial_guess: np.ndarray,
+    max_iter: int = 100,
+    tol: float = 1e-6,
+) -> np.ndarray:
+    """
+    Batched Newton-Raphson IV solver across all rows simultaneously (same
+    convergence logic as implied_volatility_newton_raphson, vectorized).
+    Rows that fail to converge within max_iter fall back to a per-row
+    scipy.optimize.brentq call, mirroring the scalar function's fallback.
+    """
+    market_price, spot, strike, tau, r, q, initial_guess = (
+        np.asarray(a, dtype=float) for a in (market_price, spot, strike, tau, r, q, initial_guess)
+    )
+    is_call = np.asarray(is_call, dtype=bool)
+    n = market_price.shape[0]
+    result = np.full(n, np.nan)
+
+    call_intrinsic = np.maximum(0.0, spot * np.exp(-q * tau) - strike * np.exp(-r * tau))
+    put_intrinsic = np.maximum(0.0, strike * np.exp(-r * tau) - spot * np.exp(-q * tau))
+    intrinsic = np.where(is_call, call_intrinsic, put_intrinsic)
+
+    valid = (tau > 0) & (market_price > 0) & (market_price > intrinsic)
+
+    sigma = np.where((initial_guess > 0) & ~np.isnan(initial_guess), initial_guess, 0.20)
+    active = valid.copy()
+
+    for _ in range(max_iter):
+        if not np.any(active):
+            break
+
+        price = black_scholes_price_vec(spot, strike, tau, r, q, sigma, is_call)
+        vega = black_scholes_vega_vec(spot, strike, tau, r, q, sigma)
+        diff = price - market_price
+
+        newly_converged = active & (np.abs(diff) < tol)
+        result[newly_converged] = sigma[newly_converged]
+        active &= ~newly_converged
+
+        # Rows with ~zero vega can't be updated further (matches scalar's `break`);
+        # they fall through to the brentq fallback below.
+        stuck = active & (np.abs(vega) < 1e-8)
+        active &= ~stuck
+
+        if np.any(active):
+            safe_vega = np.where(vega == 0, 1e-8, vega)
+            sigma_next = sigma - diff / safe_vega
+            sigma_next = np.clip(sigma_next, 0.001, 5.0)
+            sigma = np.where(active, sigma_next, sigma)
+
+    unresolved = valid & np.isnan(result)
+    for i in np.where(unresolved)[0]:
+        try:
+            option_type_i = "call" if is_call[i] else "put"
+
+            def objective(s, i=i, option_type_i=option_type_i):
+                return black_scholes_price(spot[i], strike[i], tau[i], r[i], q[i], s, option_type_i) - market_price[i]
+
+            result[i] = brentq(objective, 0.001, 5.0, xtol=tol)
+        except Exception:
+            result[i] = np.nan
+
+    return result
+
+
 def apply_arbitrage_filters(df: pd.DataFrame, volume_filter: bool = True) -> pd.DataFrame:
     """
     Apply arbitrage, quality, and liquidity filters to options snapshot.
@@ -176,66 +283,67 @@ def apply_arbitrage_filters(df: pd.DataFrame, volume_filter: bool = True) -> pd.
 def process_raw_snapshot(df: pd.DataFrame, volume_filter: bool = True) -> pd.DataFrame:
     """
     Perform moneyness calculations, BSM inversion verification, and assign tau coordinates.
+    Vectorized across all rows (no per-row .apply()) so it scales to full option chains.
     """
     processed = df.copy()
-    
-    # Calculate tau (days to expiry normalized by 252 trading days)
-    # yfinance provides expiry as string 'YYYY-MM-DD'
-    def calculate_tau(row):
-        try:
-            exp_date = datetime.strptime(row["expiry"], "%Y-%m-%d").date()
-            ts = row["timestamp"]
-            if isinstance(ts, str) and ts.endswith("Z"):
-                ts = ts[:-1] + "+00:00"
-            snap_date = datetime.fromisoformat(ts).date()
-            days = (exp_date - snap_date).days
-            # Fallback to at least 1 day to avoid tau=0 division
-            days = max(1, days)
-            return days / 252.0
-        except Exception:
-            return np.nan
-            
-    processed["tau"] = processed.apply(calculate_tau, axis=1)
+
+    # Calculate tau (days to expiry normalized by 252 trading days).
+    # yfinance provides expiry as string 'YYYY-MM-DD'; timestamp is ISO8601 (optionally 'Z'-suffixed).
+    expiry_date = pd.to_datetime(processed["expiry"], format="%Y-%m-%d", errors="coerce").dt.normalize()
+    timestamp_date = (
+        pd.to_datetime(processed["timestamp"], errors="coerce", utc=True)
+        .dt.tz_localize(None)
+        .dt.normalize()
+    )
+    days = (expiry_date - timestamp_date).dt.days
+    # Fallback to at least 1 day to avoid tau=0 division
+    days = days.clip(lower=1)
+    tau = days / 252.0
+    processed["tau"] = tau.where(expiry_date.notna() & timestamp_date.notna(), np.nan)
     processed = processed.dropna(subset=["tau"])
-    
+
     # Calculate Forward Price F = S_0 * e^((r - q)*tau)
     processed["forward_price"] = processed["spot_price"] * np.exp(
         (processed["risk_free_rate"] - processed["dividend_yield"]) * processed["tau"]
     )
-    
+
     # Calculate log-moneyness kappa = ln(K / F)
     processed["kappa"] = np.log(processed["strike"] / processed["forward_price"])
-    
-    # Re-calculate implied volatilities using custom Newton-Raphson solver to check/overwrite raw IVs
-    def calculate_iv(row):
-        mid_price = (row["bid"] + row["ask"]) / 2.0 if (pd.notna(row["bid"]) and pd.notna(row["ask"])) else row.get("lastPrice", np.nan)
-        if pd.isna(mid_price) or mid_price <= 0:
-            return row.get("impliedVolatility", np.nan)
-            
-        initial_iv = row.get("impliedVolatility")
-        if pd.isna(initial_iv) or initial_iv is None or initial_iv <= 0:
-            initial_iv = 0.20  # Sensible default guess for numerical solver
-            
-        solved_iv = implied_volatility_newton_raphson(
-            market_price=mid_price,
-            spot=row["spot_price"],
-            strike=row["strike"],
-            tau=row["tau"],
-            r=row["risk_free_rate"],
-            q=row["dividend_yield"],
-            option_type=row["option_type"],
-            initial_guess=initial_iv
+
+    # Re-calculate implied volatilities using the vectorized Newton-Raphson solver to check/overwrite raw IVs
+    bid = processed["bid"]
+    ask = processed["ask"]
+    last_price = processed["lastPrice"] if "lastPrice" in processed.columns else pd.Series(np.nan, index=processed.index)
+    orig_iv = processed["impliedVolatility"] if "impliedVolatility" in processed.columns else pd.Series(np.nan, index=processed.index)
+
+    has_bid_ask = bid.notna() & ask.notna()
+    mid_price = ((bid + ask) / 2.0).where(has_bid_ask, last_price)
+
+    valid_price_mask = mid_price.notna() & (mid_price > 0)
+    initial_iv = orig_iv.where(orig_iv.notna() & (orig_iv > 0), 0.20)
+    is_call = processed["option_type"].str.lower() == "call"
+
+    solved = np.full(len(processed), np.nan)
+    idx = valid_price_mask.to_numpy()
+    if idx.any():
+        solved[idx] = implied_volatility_newton_raphson_vec(
+            market_price=mid_price.to_numpy()[idx],
+            spot=processed["spot_price"].to_numpy()[idx],
+            strike=processed["strike"].to_numpy()[idx],
+            tau=processed["tau"].to_numpy()[idx],
+            r=processed["risk_free_rate"].to_numpy()[idx],
+            q=processed["dividend_yield"].to_numpy()[idx],
+            is_call=is_call.to_numpy()[idx],
+            initial_guess=initial_iv.to_numpy()[idx],
         )
-        # If solver fails to converge, fall back to initial value or NaN
-        if pd.notna(solved_iv):
-            return solved_iv
-        return row.get("impliedVolatility", np.nan)
-        
-    processed["impliedVolatility"] = processed.apply(calculate_iv, axis=1)
-    
+
+    solved_series = pd.Series(solved, index=processed.index)
+    # If the solver failed to converge (or the price was invalid to begin with), fall back to the original IV.
+    processed["impliedVolatility"] = solved_series.where(solved_series.notna(), orig_iv)
+
     # Run no-arbitrage and quality filters
     filtered_df = apply_arbitrage_filters(processed, volume_filter=volume_filter)
-    
+
     return filtered_df
 
 def interpolate_to_grid(kappas: np.ndarray, taus: np.ndarray, ivs: np.ndarray) -> np.ndarray:

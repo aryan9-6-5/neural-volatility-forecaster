@@ -4,7 +4,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import yaml
 import numpy as np
-from training.train import train_model, calculate_metrics, evaluate_regions, get_region_masks
+from training.train import train_model, calculate_metrics, evaluate_regions, get_region_masks, seed_everything
 from data.dataset import generate_synthetic_dataset, create_sequences
 from data.processor import GRID_KAPPAS, GRID_TAUS
 
@@ -14,8 +14,11 @@ with open("configs/base_config.yaml", "r") as f:
 lookback = config["data"]["lookback"]
 horizon = max(config["data"]["forecast_horizons"])
 
+seed = config.get("training", {}).get("seed", 42)
+seed_everything(seed)
+
 # Generate shared dataset
-dataset, _ = generate_synthetic_dataset(num_days=3000)
+dataset, _ = generate_synthetic_dataset(num_days=3000, seed=seed)
 
 # Splits
 T = len(dataset)

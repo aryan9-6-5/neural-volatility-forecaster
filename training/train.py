@@ -2,6 +2,7 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import random
 import yaml
 import numpy as np
 import torch
@@ -20,6 +21,16 @@ from data.processor import GRID_KAPPAS, GRID_TAUS
 from models.architectures import StackedLSTM, ConvLSTM, TransformerEncoderModel, HARRVLSTMHybrid
 from models.loss import SmoothnessRegularizedLoss
 from models.baselines import NaiveRandomWalk, HistoricalMean, ExponentialSmoothing, GARCHModel, HARRVModel
+from models.serialization import save_checkpoint, load_checkpoint
+
+
+def seed_everything(seed: int) -> None:
+    """Seed python/numpy/torch RNGs so training and synthetic data generation are reproducible."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -120,7 +131,11 @@ def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None
     lookback = config["data"]["lookback"]
     forecast_horizons = config["data"]["forecast_horizons"]
     horizon = max(forecast_horizons)
-    
+
+    # Seed all RNGs up front so this run (data generation, model init, training) is reproducible.
+    seed = config.get("training", {}).get("seed", 42)
+    seed_everything(seed)
+
     # 2. Prepare Data
     # Preprocessing metric counters — populated when loading real market data
     preproc_metrics = {
@@ -134,7 +149,7 @@ def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None
         raw_dir = config["data"]["raw_dir"]
         if not os.path.exists(raw_dir) or len(os.listdir(raw_dir)) == 0 or use_synthetic:
             logger.info("Raw data directory empty or synthetic flag enabled. Generating synthetic dataset.")
-            dataset, timestamps = generate_synthetic_dataset(num_days=3000)
+            dataset, timestamps = generate_synthetic_dataset(num_days=3000, seed=seed)
         else:
             logger.info(f"Loading data from raw directory: {raw_dir}")
 
@@ -174,7 +189,7 @@ def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None
             dataset, timestamps = build_surface_dataset(raw_dir, volume_filter=True)
             if len(dataset) < (lookback + horizon):
                 logger.warning("Insufficient actual collected data. Generating synthetic dataset instead.")
-                dataset, timestamps = generate_synthetic_dataset(num_days=3000)
+                dataset, timestamps = generate_synthetic_dataset(num_days=3000, seed=seed)
             
     # Chronological Split
     T = len(dataset)
@@ -214,41 +229,59 @@ def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None
     logger.info(f"Using training device: {device}")
     
     if model_name == "convlstm":
-        model = ConvLSTM(
+        model_kwargs = dict(
             in_channels=1,
             hidden_dims=config["model"]["convlstm"]["hidden_dim"],
             kernel_size=config["model"]["convlstm"]["kernel_size"][0],
             num_layers=config["model"]["convlstm"]["num_layers"],
             horizon=horizon
         )
+        model = ConvLSTM(**model_kwargs)
     elif model_name == "lstm":
-        model = StackedLSTM(
+        model_kwargs = dict(
             grid_size=(7, 7),
             hidden_dim=config["model"]["lstm"]["hidden_dim"],
             num_layers=config["model"]["lstm"]["num_layers"],
             horizon=horizon
         )
+        model = StackedLSTM(**model_kwargs)
     elif model_name == "transformer":
-        model = TransformerEncoderModel(
+        model_kwargs = dict(
             grid_size=(7, 7),
             horizon=horizon
         )
+        model = TransformerEncoderModel(**model_kwargs)
     elif model_name == "hybrid":
-        model = HARRVLSTMHybrid(
+        model_kwargs = dict(
             grid_size=(7, 7),
             hidden_dim=config["model"]["lstm"]["hidden_dim"],
             num_layers=config["model"]["lstm"]["num_layers"],
             horizon=horizon
         )
+        model = HARRVLSTMHybrid(**model_kwargs)
     else:
         raise ValueError(f"Unknown model name: {model_name}")
-        
-    # Data Contract §6 — Checkpoint metadata for reproducibility and serving safety
+
+    # Data Contract §6 — Checkpoint metadata for reproducibility and serving safety.
+    # Set now (before training starts) so every checkpoint saved during training —
+    # not just a final reloaded/re-saved copy — already carries full sidecar metadata.
     model.data_contract_version = "v1.0"
     model.lookback_window = lookback
     model.horizons = forecast_horizons
     model.tensor_orientation = "(B, L, C, E, M)"
-        
+    model.train_mean = train_mean
+    model.train_std = train_std
+
+    def _checkpoint_meta():
+        return {
+            "data_contract_version": model.data_contract_version,
+            "lookback_window": model.lookback_window,
+            "horizons": model.horizons,
+            "tensor_orientation": model.tensor_orientation,
+            "train_mean": model.train_mean,
+            "train_std": model.train_std,
+        }
+
     # ---- Two-step HAR-RV fit for hybrid model (must happen before moving to GPU) ----
     if model_name == "hybrid":
         logger.info("Fitting HAR-RV coefficients on unnormalized training sequences...")
@@ -373,8 +406,8 @@ def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 patience_counter = 0
-                # Save best checkpoint
-                torch.save(model, checkpoint_path)
+                # Save best checkpoint (state_dict + JSON sidecar — see models/serialization.py)
+                save_checkpoint(model, checkpoint_path, type(model).__name__, model_kwargs, extra_meta=_checkpoint_meta())
                 logger.info(f"--> Saved champion model checkpoint with Val Loss={best_val_loss:.6f}")
             else:
                 patience_counter += 1
@@ -384,33 +417,22 @@ def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None
                     
         # Load best model for final test set evaluation
         logger.info("Evaluating champion model on test set...")
-        best_model = torch.load(checkpoint_path, weights_only=False)
-        
-        # Save training mean and std as model attributes for inference denormalization
-        best_model.train_mean = train_mean
-        best_model.train_std = train_std
-
-        # Data Contract §6 — Checkpoint metadata for reproducibility and serving safety
-        best_model.data_contract_version = "v1.0"
-        best_model.lookback_window = lookback
-        best_model.horizons = forecast_horizons
-        best_model.tensor_orientation = "(B, L, C, E, M)"
-
-        torch.save(best_model, checkpoint_path)
+        best_model = load_checkpoint(checkpoint_path, map_location=device)
         logger.info(
-            f"Checkpoint saved with contract metadata: "
+            f"Checkpoint loaded with contract metadata: "
             f"version={best_model.data_contract_version}, "
             f"lookback={best_model.lookback_window}, "
             f"horizons={best_model.horizons}, "
             f"orientation={best_model.tensor_orientation}"
         )
-        
+
         # Save as active served model if it matches config
         active_model_name = config.get("model", {}).get("name", "hybrid")
         if model_name == active_model_name:
             import shutil
             shutil.copy(checkpoint_path, "models/checkpoint.pt")
-            logger.info(f"Copied {checkpoint_path} to models/checkpoint.pt as active served model.")
+            shutil.copy(checkpoint_path + ".json", "models/checkpoint.pt.json")
+            logger.info(f"Copied {checkpoint_path} (+ sidecar) to models/checkpoint.pt as active served model.")
             
         best_model.eval()
         
@@ -441,15 +463,18 @@ def evaluate_all(config, use_synthetic=False):
     lookback = config["data"]["lookback"]
     forecast_horizons = config["data"]["forecast_horizons"]
     horizon = max(forecast_horizons)
-    
+
+    seed = config.get("training", {}).get("seed", 42)
+    seed_everything(seed)
+
     # Load Data
     raw_dir = config["data"]["raw_dir"]
     if not os.path.exists(raw_dir) or len(os.listdir(raw_dir)) == 0 or use_synthetic:
-        dataset, _ = generate_synthetic_dataset(num_days=3000)
+        dataset, _ = generate_synthetic_dataset(num_days=3000, seed=seed)
     else:
         dataset, _ = build_surface_dataset(raw_dir, volume_filter=True)
         if len(dataset) < (lookback + horizon):
-            dataset, _ = generate_synthetic_dataset(num_days=3000)
+            dataset, _ = generate_synthetic_dataset(num_days=3000, seed=seed)
             
     # Splits
     T = len(dataset)
