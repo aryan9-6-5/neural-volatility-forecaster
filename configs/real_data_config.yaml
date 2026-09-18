@@ -1,0 +1,84 @@
+# Real-data experiment configuration (SPY 2024 integration test).
+# Full clone of base_config.yaml with ONLY the overrides below changed.
+# base_config.yaml (and the production lookback=60 pipeline it drives) is
+# left untouched by this file's existence.
+
+# Target assets configuration
+ticker: "SPY"
+
+# Data parameters
+data:
+  raw_dir: "data/raw"
+  historical_dir: "data/historical"
+  processed_dir: "data/processed"
+
+  # Overridden: Data Contract v1.0's frozen lookback_window=20 (base_config.yaml
+  # currently has lookback=60, a pre-existing inconsistency with the frozen
+  # contract -- not fixed here since that's a separate decision affecting the
+  # already-working production/serving pipeline).
+  lookback: 20
+  forecast_horizons: [1, 5, 10]
+
+  # Chronological split ratios (must sum to 1.0) -- same convention as base_config.yaml
+  train_ratio: 0.6
+  val_ratio: 0.2
+  test_ratio: 0.2
+
+  # Standardized spatial grid limits and coordinates
+  moneyness_grid: [-0.30, -0.20, -0.10, 0.00, 0.10, 0.20, 0.30]
+  expiry_grid: [0.01923, 0.03846, 0.08333, 0.16667, 0.25, 0.5, 1.0] # 1w, 2w, 1m, 2m, 3m, 6m, 1y
+
+  historical_dataset_path: "data/historical/spy_2024_surfaces.npz"  # informational; not read by existing loaders
+
+# Model parameters
+model:
+  # Sentinel: deliberately does not match "lstm"/"transformer"/"hybrid", so
+  # train_model's active-checkpoint-promotion branch (which copies a trained
+  # checkpoint to the live-served models/checkpoint.pt) can never fire for
+  # this experiment, no matter which model_name is passed to it.
+  name: "real_data_experiment_2024"
+  lstm:
+    hidden_dim: 64
+    num_layers: 3
+  convlstm:
+    hidden_dim: [32, 64, 64]
+    kernel_size: [3]
+    num_layers: 3
+  transformer:
+    d_model: 128
+    nhead: 4
+    num_layers: 3
+  hybrid:
+    hidden_dim: 64
+    num_layers: 3
+
+# Training execution parameters (unchanged from base_config.yaml)
+training:
+  batch_size: 32
+  learning_rate: 0.0003
+  epochs: 100
+  early_stopping_patience: 15
+  grad_clip: 1.0
+  seed: 42
+  loss:
+    lambda_strike: 0.0001
+    lambda_expiry: 0.0001
+    lambda_calendar: 0.01
+    lambda_butterfly: 0.0
+    lambda_residual_mean: 1.0
+
+# Serving & Monitoring parameters (unchanged from base_config.yaml; this
+# experiment does not touch serving at all)
+serving:
+  host: "127.0.0.1"
+  port: 8000
+  model_registry_uri: "mlruns"
+  model_name: "volatility_surface_forecaster"
+  history_buffer_path: "data/state/rolling_buffer.npz"
+  degraded_mode_padding: false
+  prediction_store_path: "data/state/pending_predictions.npz"
+
+monitoring:
+  rolling_window_days: 10
+  kl_threshold: 0.5
+  rmse_threshold_factor: 1.5

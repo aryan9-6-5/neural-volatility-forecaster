@@ -128,6 +128,46 @@ class TestDataProcessor(unittest.TestCase):
         self.assertEqual(grid_iv.shape, (7, 7))
         self.assertTrue(np.all(grid_iv >= 0.01))
         self.assertTrue(np.all(grid_iv <= 5.0))
-        
+
+    def test_rbf_interpolation_large_chain_matches_small_chain_default(self):
+        """The neighbors-bounded default must be numerically identical to the
+        unbounded global fit whenever point count <= neighbors (regression
+        test for the interpolate_to_grid performance fix)."""
+        np.random.seed(7)
+        n = 40  # below the default neighbors=50 bound
+        kappas = np.random.uniform(-0.2, 0.2, n)
+        taus = np.random.uniform(0.05, 0.9, n)
+        ivs = np.clip(0.20 + 0.15 * kappas**2 + 0.05 * np.log(taus), 0.05, 0.8)
+
+        bounded = interpolate_to_grid(kappas, taus, ivs, neighbors=50)
+        unbounded = interpolate_to_grid(kappas, taus, ivs, neighbors=None)
+        np.testing.assert_array_equal(bounded, unbounded)
+
+    def test_rbf_interpolation_falls_back_on_degenerate_local_neighborhood(self):
+        """A dense single-expiry strike ladder (many points sharing the same
+        tau) can make a local k-nearest-neighbors fit's monomial matrix
+        rank-deficient (LinAlgError). interpolate_to_grid must recover via
+        the global-fit fallback instead of raising, since the equivalent
+        unbounded call would have succeeded fine."""
+        np.random.seed(11)
+        # 60 points all sharing one tau (a dense 0DTE-style strike ladder) plus
+        # a few points at other expiries -- the nearest-50 neighborhood for a
+        # grid query point near that ladder will be tau-constant.
+        kappas_same_tau = np.random.uniform(-0.3, 0.3, 60)
+        taus_same_tau = np.full(60, 0.05)
+        ivs_same_tau = np.clip(0.20 + 0.15 * kappas_same_tau**2, 0.05, 0.8)
+
+        kappas_other = np.random.uniform(-0.3, 0.3, 10)
+        taus_other = np.random.uniform(0.2, 1.0, 10)
+        ivs_other = np.clip(0.20 + 0.05 * np.log(taus_other), 0.05, 0.8)
+
+        kappas = np.concatenate([kappas_same_tau, kappas_other])
+        taus = np.concatenate([taus_same_tau, taus_other])
+        ivs = np.concatenate([ivs_same_tau, ivs_other])
+
+        grid_iv = interpolate_to_grid(kappas, taus, ivs, neighbors=50)
+        self.assertEqual(grid_iv.shape, (7, 7))
+        self.assertTrue(np.all(np.isfinite(grid_iv)))
+
 if __name__ == "__main__":
     unittest.main()

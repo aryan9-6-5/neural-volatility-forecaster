@@ -123,9 +123,15 @@ def evaluate_regions(y_pred, y_true, masks):
     return results
 
 
-def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None):
+def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None, output_dir="models"):
     """
     Core function to train PyTorch models and log to MLflow.
+
+    Args:
+        output_dir: directory checkpoints and predictions are written under
+            (default "models", preserving prior behavior). Pass a separate
+            directory (e.g. "models/real_data") for experimental runs so they
+            never overwrite the production checkpoints saved under "models/".
     """
     # 1. Load configuration parameters
     lookback = config["data"]["lookback"]
@@ -312,8 +318,8 @@ def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None
     patience = config["training"]["early_stopping_patience"]
     patience_counter = 0
     
-    os.makedirs("models", exist_ok=True)
-    checkpoint_path = f"models/checkpoint_{model_name}.pt"
+    os.makedirs(output_dir, exist_ok=True)
+    checkpoint_path = os.path.join(output_dir, f"checkpoint_{model_name}.pt")
     
     with mlflow.start_run() as run:
         mlflow.log_params({
@@ -445,10 +451,12 @@ def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None
         test_y_pred = test_y_pred_norm * train_std + train_mean
         
         # Persist raw predictions to disk for significance testing (no retraining needed)
-        os.makedirs("models/predictions", exist_ok=True)
-        np.save(f"models/predictions/{model_name}_pred.npy", test_y_pred)
-        np.save(f"models/predictions/{model_name}_true.npy", y_test)
-        logger.info(f"Saved test predictions to models/predictions/{model_name}_pred.npy")
+        predictions_dir = os.path.join(output_dir, "predictions")
+        os.makedirs(predictions_dir, exist_ok=True)
+        pred_path = os.path.join(predictions_dir, f"{model_name}_pred.npy")
+        np.save(pred_path, test_y_pred)
+        np.save(os.path.join(predictions_dir, f"{model_name}_true.npy"), y_test)
+        logger.info(f"Saved test predictions to {pred_path}")
         
         # Log Pytorch model checkpoint to MLflow
         mlflow.pytorch.log_model(best_model, "volatility_surface_forecaster")
@@ -456,9 +464,18 @@ def train_model(config, model_name="convlstm", use_synthetic=False, dataset=None
     return test_y_pred, y_test
 
 
-def evaluate_all(config, use_synthetic=False):
+def evaluate_all(config, use_synthetic=False, dataset=None, output_dir="models"):
     """
     Fits and evaluates all baselines and PyTorch models, reporting a region-decomposed comparison table.
+
+    Args:
+        dataset: optional pre-built (T, 7, 7) surface array. When provided, the
+            internal synthetic/raw-directory loading below is skipped entirely
+            and this array is used as-is (e.g. for validating the existing
+            models against a real historical dataset).
+        output_dir: forwarded to train_model for each DL model (see its
+            docstring) — use a non-default value to avoid overwriting the
+            production checkpoints under "models/".
     """
     lookback = config["data"]["lookback"]
     forecast_horizons = config["data"]["forecast_horizons"]
@@ -468,13 +485,14 @@ def evaluate_all(config, use_synthetic=False):
     seed_everything(seed)
 
     # Load Data
-    raw_dir = config["data"]["raw_dir"]
-    if not os.path.exists(raw_dir) or len(os.listdir(raw_dir)) == 0 or use_synthetic:
-        dataset, _ = generate_synthetic_dataset(num_days=3000, seed=seed)
-    else:
-        dataset, _ = build_surface_dataset(raw_dir, volume_filter=True)
-        if len(dataset) < (lookback + horizon):
+    if dataset is None:
+        raw_dir = config["data"]["raw_dir"]
+        if not os.path.exists(raw_dir) or len(os.listdir(raw_dir)) == 0 or use_synthetic:
             dataset, _ = generate_synthetic_dataset(num_days=3000, seed=seed)
+        else:
+            dataset, _ = build_surface_dataset(raw_dir, volume_filter=True)
+            if len(dataset) < (lookback + horizon):
+                dataset, _ = generate_synthetic_dataset(num_days=3000, seed=seed)
             
     # Splits
     T = len(dataset)
@@ -523,17 +541,17 @@ def evaluate_all(config, use_synthetic=False):
     
     # 6. LSTM Model (train and predict)
     logger.info("---------- Training Stacked LSTM ----------")
-    lstm_pred, _ = train_model(config, model_name="lstm", use_synthetic=use_synthetic, dataset=dataset)
+    lstm_pred, _ = train_model(config, model_name="lstm", use_synthetic=use_synthetic, dataset=dataset, output_dir=output_dir)
     all_results["LSTM"] = (lstm_pred, calculate_metrics(lstm_pred, y_test), evaluate_regions(lstm_pred, y_test, masks))
     
     # 7. Transformer Model (train and predict)
     logger.info("---------- Training Transformer Encoder ----------")
-    transformer_pred, _ = train_model(config, model_name="transformer", use_synthetic=use_synthetic, dataset=dataset)
+    transformer_pred, _ = train_model(config, model_name="transformer", use_synthetic=use_synthetic, dataset=dataset, output_dir=output_dir)
     all_results["Transformer"] = (transformer_pred, calculate_metrics(transformer_pred, y_test), evaluate_regions(transformer_pred, y_test, masks))
 
     # 8. HAR-RV + LSTM Hybrid (train and predict)
     logger.info("---------- Training HAR-RV + LSTM Hybrid ----------")
-    hybrid_pred, _ = train_model(config, model_name="hybrid", use_synthetic=use_synthetic, dataset=dataset)
+    hybrid_pred, _ = train_model(config, model_name="hybrid", use_synthetic=use_synthetic, dataset=dataset, output_dir=output_dir)
     all_results["Hybrid (HAR+LSTM)"] = (hybrid_pred, calculate_metrics(hybrid_pred, y_test), evaluate_regions(hybrid_pred, y_test, masks))
 
     # Print results summary table

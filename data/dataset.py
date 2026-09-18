@@ -99,10 +99,34 @@ def import_historical_dataset(file_path_or_dir: str, volume_filter: bool = False
             
     if df.empty:
         raise ValueError("Loaded historical dataset is empty.")
-        
+
+    return import_historical_dataframe(df, volume_filter=volume_filter)
+
+
+def import_historical_dataframe(df: pd.DataFrame, volume_filter: bool = False, collect_stats: bool = False) -> tuple:
+    """
+    Core of import_historical_dataset, split out so an in-memory DataFrame
+    (e.g. already assembled by a dataset-specific adapter, such as
+    data.adapters.spy_options_dataset) can be processed directly without a
+    round-trip through disk. Column-mapping/dynamic-synonym behavior is
+    identical to import_historical_dataset's docstring.
+
+    Args:
+        collect_stats: if True, also returns a list of per-day dicts (one per
+            unique timestamp) with raw/valid contract counts, a stage-by-stage
+            rejection breakdown (see data.processor.apply_arbitrage_filters),
+            and a skip_reason ("insufficient_valid_contracts" or
+            "interpolation_error") for days that produced no surface.
+
+    Returns:
+        (dataset, timestamps) normally, or (dataset, timestamps, per_day_stats)
+        when collect_stats=True.
+    """
+    df = df.copy()
+
     # 2. Dynamic column schema mapping
     col_mapping = {}
-    
+
     # helper mapping keys
     synonyms = {
         "timestamp": ["date", "quote_date", "timestamp", "datetime", "QuoteDate"],
@@ -115,7 +139,7 @@ def import_historical_dataset(file_path_or_dir: str, volume_filter: bool = False
         "impliedVolatility": ["impliedVolatility", "implied_volatility", "iv", "ImpliedVolatility"],
         "spot_price": ["spot_price", "underlying_price", "spot", "UnderlyingPrice", "Spot"]
     }
-    
+
     for standard_name, options in synonyms.items():
         matched = False
         for opt in options:
@@ -125,10 +149,10 @@ def import_historical_dataset(file_path_or_dir: str, volume_filter: bool = False
                 break
         if not matched and standard_name in ["timestamp", "strike", "expiry", "option_type"]:
             raise ValueError(f"Required column representing '{standard_name}' could not be matched. Columns found: {list(df.columns)}")
-            
+
     # Rename columns to standard names
     df = df.rename(columns=col_mapping)
-    
+
     # Standardize option type values (C/call -> call, P/put -> put)
     def clean_opt_type(val):
         val_str = str(val).lower()
@@ -137,9 +161,9 @@ def import_historical_dataset(file_path_or_dir: str, volume_filter: bool = False
         elif 'p' in val_str:
             return "put"
         return "call"
-        
+
     df["option_type"] = df["option_type"].apply(clean_opt_type)
-    
+
     # Fill standard auxiliary fields if missing
     if "risk_free_rate" not in df.columns:
         df["risk_free_rate"] = 0.045 # Default fallback
@@ -148,28 +172,37 @@ def import_historical_dataset(file_path_or_dir: str, volume_filter: bool = False
     if "spot_price" not in df.columns:
         # If spot price is completely missing, approximate from ATM option strikes, or raise error
         raise ValueError("Missing 'spot_price' column in historical data.")
-        
+
     # Standardize timestamp to string ISO format
     df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
-    
+
     # Sort chronologically
     df = df.sort_values("timestamp")
-    
+
     # 3. Process day-by-day snapshots
     surfaces = []
     timestamps = []
-    
+    per_day_stats = []
+
     grouped = df.groupby("timestamp")
     total_groups = len(grouped)
     logger.info(f"Processing {total_groups} unique historical daily snapshots...")
-    
+
     idx = 0
     for ts, snap in grouped:
+        day_stats = {} if collect_stats else None
         try:
-            processed = process_raw_snapshot(snap, volume_filter=volume_filter)
+            processed = process_raw_snapshot(snap, volume_filter=volume_filter, stats=day_stats)
             if len(processed) < 5:
+                if day_stats is not None:
+                    day_stats["skip_reason"] = "insufficient_valid_contracts"
+                    per_day_stats.append({"date": ts, **day_stats})
                 continue
-                
+
+            if day_stats is not None:
+                from data.historical_quality_report import compute_coverage_pct
+                day_stats["coverage_pct"] = compute_coverage_pct(processed["kappa"].values, processed["tau"].values)
+
             grid_iv = interpolate_to_grid(
                 processed["kappa"].values,
                 processed["tau"].values,
@@ -177,19 +210,28 @@ def import_historical_dataset(file_path_or_dir: str, volume_filter: bool = False
             )
             surfaces.append(grid_iv)
             timestamps.append(ts)
-            
+            if day_stats is not None:
+                day_stats["skip_reason"] = None
+                per_day_stats.append({"date": ts, **day_stats})
+
             idx += 1
             if idx % 50 == 0 or idx == total_groups:
                 logger.info(f"Processed {idx}/{total_groups} snapshots...")
         except Exception as e:
             logger.error(f"Error processing historical date {ts}: {e}")
+            if day_stats is not None:
+                day_stats["skip_reason"] = "interpolation_error"
+                per_day_stats.append({"date": ts, **day_stats})
             continue
-            
+
     if not surfaces:
         raise ValueError("No historical surfaces could be successfully constructed.")
-        
+
     dataset = np.stack(surfaces, axis=0)
     logger.info(f"Historical import complete. Built surface tensor of shape {dataset.shape}")
+
+    if collect_stats:
+        return dataset, timestamps, per_day_stats
     return dataset, timestamps
 
 def create_sequences(data: np.ndarray, lookback: int, horizon: int) -> tuple:

@@ -30,6 +30,10 @@ model:
   lstm:
     hidden_dim: 64
     num_layers: 3
+  convlstm:
+    hidden_dim: [32, 64, 64]  # list: per-layer hidden channel counts (models.architectures.ConvLSTM)
+    kernel_size: [3]
+    num_layers: 3
   transformer:
     d_model: 128
     nhead: 4
